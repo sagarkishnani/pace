@@ -40,6 +40,8 @@ rojo según la proyección de gasto contra la bolsa.
 supabase/
   migrations/001_schema.sql    tablas, índices, RLS
   migrations/002_ciclos.sql    abrir_ciclo, cerrar_ciclo, estado_ciclo
+  migrations/003_matching.sql  normalización, enlace de servicios, triggers
+  migrations/004_comercios.sql catálogo de comercios
   functions/gasto/index.ts     POST /gasto — endpoint del Atajo
 ```
 
@@ -205,12 +207,21 @@ y en el menú del Atajo; las dos tienen que decir lo mismo.
 Responde con el id del movimiento, la categoría con la que quedó, y el estado del ciclo
 (`disponible`, `permitido_dia`, `estado`).
 
+## Consultas de la reconciliación semanal
+
+```sql
+select * from sin_resolver();        -- lo que quedó sin categoría o sin confirmar
+select * from recibos_pendientes();  -- recibos vencidos que nunca llegaron
+select enlazar_documentos();         -- amarra boletas sueltas a sus movimientos
+```
+
 ## Estado
 
 - [x] **Fase 1** — esquema, motor de ciclos, endpoint y Atajo
-- [ ] **Fase 2** — Worker con los parsers de correo (BCP, Yape servicios, Yape P2P, Plin)
+- [x] **Fase 2a** — motor de matching en la base (migraciones 003 y 004)
+- [ ] **Fase 2b** — Cloudflare Email Worker con los parsers (BCP, Yape servicios, Yape P2P, Plin)
 - [ ] **Fase 3** — resumen diario y frontend
 
-La fase 2 arranca recién después de dos semanas usando el Atajo. La entrada manual es la
-única pieza que depende de cambiar un hábito: si va a fallar, mejor que falle ahora y no
-con todo el pipeline ya construido.
+La 2b necesita los cuerpos reales de los cuatro correos para escribir los regexes. El
+motor de matching ya está listo y no depende de ellos: el Worker solo tiene que insertar
+en `movimientos` con `codigo_usuario`, `empresa` y `destinatario` dentro de `raw`.

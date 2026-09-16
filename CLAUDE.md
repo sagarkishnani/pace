@@ -9,7 +9,9 @@ margen real queda para ahorrar hacia una meta (inicial de depto / carro).
 ```
 supabase/
   migrations/001_schema.sql    tablas, índices, RLS
-  migrations/002_ciclos.sql    funciones: abrir_ciclo, cerrar_ciclo, estado_ciclo
+  migrations/002_ciclos.sql    abrir_ciclo, cerrar_ciclo, estado_ciclo
+  migrations/003_matching.sql  normalización, enlace de servicios, triggers
+  migrations/004_comercios.sql catálogo de comercios (datos, no lógica)
   functions/gasto/index.ts     POST /gasto — endpoint del Atajo de iOS
 ```
 
@@ -63,6 +65,43 @@ referencia (Yape, el Atajo). Reprocesar un correo debe ser inocuo.
 
 **Antes de `dia_inicio_eval` el estado es siempre verde.** La proyección con 2 días de
 datos es ruido.
+
+## Matching (migración 003)
+
+El enriquecimiento vive en la base, no en el Worker. El Worker solo parsea el correo e
+inserta en `movimientos` con lo crudo en `raw`; el trigger `tg_enriquecer_movimiento`
+resuelve servicio, comercio y categoría antes de guardar.
+
+**Contrato de `raw`.** Estas tres claves son las que lee el trigger:
+
+| Clave            | Quién la trae        | Para qué                                  |
+|------------------|----------------------|-------------------------------------------|
+| `codigo_usuario` | Yape servicios       | match exacto contra `servicios`           |
+| `empresa`        | Yape servicios, BCP  | match de respaldo si no hay código        |
+| `destinatario`   | Yape P2P, Plin       | categoría aprendida vía `destinatarios`   |
+
+Todo lo demás del correo va igual a `raw` — es el respaldo cuando un parser resulte estar
+mal y haya que reprocesar sin volver al correo.
+
+**El trigger nunca pisa lo que ya decidiste.** Solo rellena campos nulos. Una categoría
+que mandó el Atajo o que corregiste a mano sobrevive al catálogo de comercios.
+
+**Gana el patrón más largo** en `buscar_comercio()`. Por eso `DIDI FOOD` y `DIDI` conviven
+sin que el delivery termine contado como transporte. Si agregas un patrón que es prefijo
+de otro, verifica ese caso.
+
+**Un movimiento atado a un fijo o servicio pierde la categoría.** Es deliberado: las
+categorías son solo de gasto variable y `estado_ciclo()` ya excluye esos movimientos de la
+bolsa. Si además llevaran categoría, el resumen por categoría contaría plata que no está
+en la bolsa.
+
+**Ante la duda, no enlazar.** `buscar_servicio()` devuelve `ambiguo` cuando dos servicios
+activos quedan a menos del 15% de distancia del monto, y el trigger deja el movimiento
+suelto. Sale en `sin_resolver()` y lo arreglas en la reconciliación semanal. Un enlace
+equivocado es más caro que uno faltante: el faltante se ve, el equivocado no.
+
+**`recibos_pendientes()` es lo único que avisa por algo que no pasó** — un servicio cuyo
+`vence_el` ya pasó y no tiene movimiento en el ciclo.
 
 ## Captura de gastos por fuente
 
