@@ -9,3 +9,7 @@ supabase/.branches/
 .env
 .env.*
 !.env.example
+
+# Node / Cloudflare
+node_modules/
+.wrangler/
