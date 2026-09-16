@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { aTexto } from "../src/texto.ts";
-import { parsear } from "../src/parsers.ts";
+import { aTexto } from "../supabase/functions/_shared/texto.ts";
+import { parsear } from "../supabase/functions/_shared/parsers.ts";
 import { BCP_TARJETA, PLIN, YAPE_P2P, YAPE_SERVICIO } from "./correos.ts";
 
 const leer = (crudo: string) => parsear(aTexto(crudo, false));

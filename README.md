@@ -44,9 +44,9 @@ supabase/
   migrations/004_comercios.sql catálogo de comercios
   migrations/005_worker.sql    ajustes de los correos reales
   functions/gasto/index.ts     POST /gasto — endpoint del Atajo
-worker/
-  src/                         parsers de correo (Cloudflare Email Worker)
-  test/                        los cuatro correos reales como fixtures
+  functions/correo/index.ts    POST /correo — webhook del correo entrante
+  functions/_shared/           parsers, normalización, lectura del webhook
+test/                          los cuatro correos reales como fixtures
 ```
 
 ## Requisitos
@@ -211,51 +211,76 @@ y en el menú del Atajo; las dos tienen que decir lo mismo.
 Responde con el id del movimiento, la categoría con la que quedó, y el estado del ciclo
 (`disponible`, `permitido_dia`, `estado`).
 
-## El Worker de correo
+## La entrada de correo
 
-Recibe las notificaciones del banco, las parsea e inserta en `movimientos`. El
-enriquecimiento —enlazar el servicio, normalizar el comercio, poner la categoría— lo hace
-la base sola.
+Un proveedor de correo entrante te da una dirección hospedada, recibe la notificación del
+banco y hace POST a `/correo` con el cuerpo ya parseado. La función lo convierte en
+movimiento; el enriquecimiento —enlazar el servicio, normalizar el comercio, poner la
+categoría— lo hace la base sola.
+
+No hace falta dominio propio ni tocar DNS.
 
 Cubre cuatro formatos:
 
-| Correo          | Remitente                              | Llave que aporta        |
-|-----------------|----------------------------------------|-------------------------|
-| BCP tarjeta     | `notificaciones@notificacionesbcp.com.pe` | 4 dígitos y comercio |
-| Yape servicios  | `notificaciones@yape.pe`               | código de usuario       |
-| Yape P2P        | `notificaciones@yape.pe`               | beneficiario + celular  |
-| Plin            | `servicioalcliente@netinterbank.com.pe`| código de operación     |
+| Correo          | Remitente                                 | Llave que aporta       |
+|-----------------|-------------------------------------------|------------------------|
+| BCP tarjeta     | `notificaciones@notificacionesbcp.com.pe` | 4 dígitos y comercio   |
+| Yape servicios  | `notificaciones@yape.pe`                  | código de usuario      |
+| Yape P2P        | `notificaciones@yape.pe`                  | beneficiario + celular |
+| Plin            | `servicioalcliente@netinterbank.com.pe`   | código de operación    |
 
-**Probar los parsers** (no necesita `npm install`):
+**Probar los parsers** (sin dependencias, no necesita `npm install`):
 
 ```bash
-cd worker && npm test
+npm test
 ```
 
 **Desplegar:**
 
 ```bash
-cd worker
-npm install
-npx wrangler secret put SUPABASE_URL
-npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-npx wrangler deploy
+openssl rand -hex 24                        # token del webhook
+supabase secrets set CORREO_TOKEN=<el token>
+supabase functions deploy correo
 ```
 
-Después, en el panel de Cloudflare: **Email → Email Routing → Routes**, y apunta una
-dirección al Worker `pace-correos`. Esa es la dirección a la que reenvías desde Gmail con
-un filtro por remitente.
+Queda en `https://<project-ref>.supabase.co/functions/v1/correo`.
 
-**Si reenvías desde Gmail**, el sobre del correo lleva tu dirección y no la del banco, así
-que el Worker lo va a rechazar. Agrega la tuya:
+**Conectar el proveedor.** En Postmark, CloudMailin o Mailgun: creas un stream de correo
+entrante, te dan una dirección, y apuntas su webhook a esa URL con el token. Postmark
+acepta credenciales en la URL del webhook y las manda como Basic, que la función entiende:
+
+```
+https://pace:<el token>@<project-ref>.supabase.co/functions/v1/correo
+```
+
+Si tu proveedor no soporta Basic, manda el token como `Authorization: Bearer <el token>`.
+
+**Reenviar desde Gmail.** Un filtro por remitente hacia la dirección del proveedor:
+
+```
+from:(notificaciones@yape.pe OR notificaciones@notificacionesbcp.com.pe OR servicioalcliente@netinterbank.com.pe)
+```
+
+Gmail pide verificar la dirección de reenvío con un código antes de dejarte usarla. Ese
+código llega a la dirección del proveedor, así que lo lees en su panel de correos
+recibidos — todos muestran el contenido del último mensaje.
+
+**El filtro de remitente.** La función solo acepta correos de los tres remitentes de los
+bancos. Si tu reenvío reescribe el `From:`, agrega tu dirección:
 
 ```bash
-npx wrangler secret put REMITENTES     # tu@gmail.com
+supabase secrets set REMITENTES=tu@gmail.com
 ```
 
-El filtro de remitente existe porque cualquiera que sepa la dirección puede mandarle un
-correo haciéndose pasar por el banco. El daño máximo es un movimiento inventado —que
-además aparece en `sin_resolver()`— pero no cuesta nada cerrar la puerta.
+Existe porque cualquiera que sepa la dirección puede escribirle haciéndose pasar por el
+banco. El daño máximo es un movimiento inventado —que además aparece en `sin_resolver()`—
+pero cerrar la puerta es gratis.
+
+**Ver qué está llegando:**
+
+```bash
+supabase functions logs correo
+```
 
 ## Consultas de la reconciliación semanal
 
@@ -268,12 +293,11 @@ select enlazar_documentos();         -- amarra boletas sueltas a sus movimientos
 ## Estado
 
 - [x] **Fase 1** — esquema, motor de ciclos, endpoint y Atajo
-- [x] **Fase 2** — matching en la base y Worker con los cuatro parsers
+- [x] **Fase 2** — matching en la base y los cuatro parsers tras `/correo`
 - [ ] **Fase 3** — resumen diario y frontend
 
-Falta desplegar el Worker y verlo con correos que lleguen de verdad. Los parsers están
-probados contra los cuatro formatos reales, pero sobre el texto ya renderizado, no sobre
-el MIME crudo que entrega Cloudflare. Ahí es donde puede aparecer la primera sorpresa.
+Falta contratar el proveedor, apuntar el webhook y verlo con correos que lleguen de
+verdad.
 
 Con las cinco fuentes de correo andando, el único gasto que sigue dependiendo de que te
 acuerdes es el consumo con tarjeta Interbank.

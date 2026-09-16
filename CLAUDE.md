@@ -14,11 +14,12 @@ supabase/
   migrations/004_comercios.sql catálogo de comercios (datos, no lógica)
   migrations/005_worker.sql    ajustes que salieron de los correos reales
   functions/gasto/index.ts     POST /gasto — endpoint del Atajo de iOS
-worker/
-  src/texto.ts                 normalización de correo y extracción de campos
-  src/parsers.ts               los cuatro parsers
-  src/index.ts                 handler de Cloudflare Email Worker
-  test/correos.ts              los cuatro correos reales, literales
+  functions/correo/index.ts    POST /correo — webhook del correo entrante
+  functions/_shared/texto.ts   normalización y extracción de campos
+  functions/_shared/parsers.ts los cuatro parsers
+  functions/_shared/webhook.ts lectura del payload del proveedor
+test/
+  correos.ts                   los cuatro correos reales, literales
 ```
 
 No es un repo git. El README que se mencionó en el diseño nunca llegó al disco.
@@ -109,9 +110,23 @@ equivocado es más caro que uno faltante: el faltante se ve, el equivocado no.
 **`recibos_pendientes()` es lo único que avisa por algo que no pasó** — un servicio cuyo
 `vence_el` ya pasó y no tiene movimiento en el ciclo.
 
-## El Worker de correo
+## La entrada de correo
 
-Cloudflare Email Worker. Parsea e inserta, nada más — todo lo demás lo hacen los triggers.
+Un proveedor de correo entrante (Postmark, CloudMailin, Mailgun) recibe el correo del
+banco y hace POST a `/correo` con el cuerpo ya parseado. La función lo convierte en
+movimiento, nada más — todo lo demás lo hacen los triggers.
+
+**No hay dominio propio.** Se evaluó Cloudflare Email Routing y se descartó: exige un
+dominio con los MX apuntando a Cloudflare, y el único dominio disponible
+(`twnstudios.com`) tiene el correo de trabajo en Google Workspace y el sitio en
+CloudFront. No vale la pena poner eso en juego por este proyecto.
+
+**El payload se lee en los tres formatos** (`TextBody`/`plain`/`body-plain` y sus
+equivalentes HTML), y acepta JSON o formulario. Soportarlos todos cuesta diez líneas y
+evita quedar casado con un proveedor.
+
+**Se prefiere el texto plano sobre el HTML.** Es el que manda el proveedor ya limpio, y
+ahorra el paso de HTML a texto, que es el más frágil de la cadena.
 
 **Los parsers deciden por contenido, no por remitente.** Los bancos cambian de dominio de
 envío más seguido que de plantilla. El remitente solo se usa como filtro de seguridad.
@@ -128,8 +143,9 @@ sin ser el mismo gasto.
 **Los cuatro correos traen número de operación**, así que la deduplicación siempre va por
 referencia. El hash es red de seguridad, no el camino normal.
 
-**Un 23505 cuenta como éxito.** Cloudflare reintenta ante un error y un duplicado no es un
-fallo: si se lanzara, el reintento quedaría en bucle.
+**Un 23505 cuenta como éxito, y los descartes responden 200.** El proveedor reintenta
+ante cualquier error. Un duplicado, un remitente desconocido o un correo sin parser no se
+arreglan reintentando, así que devolver error los dejaría en bucle.
 
 **Yape P2P trae los últimos dígitos del celular del beneficiario.** El nombre llega
 truncado (`Antuanet Var*`) y solo se presta a colisiones; la llave de `destinatarios` es
@@ -140,15 +156,23 @@ termina en el alias.
 transferencias Plin; el consumo con tarjeta Interbank sigue sin canal y sigue dependiendo
 del Atajo.
 
+**`/correo` va con `verify_jwt = false`** (en `config.toml`): el proveedor no manda JWT de
+Supabase. Se autentica con `CORREO_TOKEN`, por Bearer o por Basic con el token como
+contraseña, que es como lo manda Postmark cuando pones credenciales en la URL.
+
 ### Correr los tests
 
 ```bash
-cd worker && npm test
+npm test
 ```
 
-No necesita `npm install`: los tests solo tocan `texto.ts` y `parsers.ts`, y corren con el
-soporte nativo de TypeScript de Node 22. Las fixtures son los cuatro correos reales, tal
+No necesita `npm install` ni dependencias: corren con el soporte nativo de TypeScript de
+Node 22 sobre los módulos de `_shared`. Las fixtures son los cuatro correos reales, tal
 cual llegan — su valor está en que son literales, así que no los edites al refactorizar.
+
+Lo que no se puede probar así es `functions/correo/index.ts`, que importa Deno y
+supabase-js. Por eso la lectura del payload vive en `_shared/webhook.ts` y no dentro del
+handler: ahí sí se prueba.
 
 ## Captura de gastos por fuente
 
@@ -168,13 +192,11 @@ Atajo hay que atraparlo en la reconciliación semanal. Por eso el match de servi
 ## Fases
 
 1. **Hecho** — Atajo de iOS + `/gasto`.
-2. **Hecho** — motor de matching en la base y Worker con los cuatro parsers.
+2. **Hecho** — motor de matching en la base y los cuatro parsers tras `/correo`.
 3. Resumen diario y frontend.
 
-Pendiente antes de dar la fase 2 por cerrada: desplegar el Worker y confirmar contra
-correos que lleguen de verdad. Los parsers están probados contra los cuatro formatos
-reales, pero sobre el texto ya renderizado — no sobre el MIME crudo que entrega
-Cloudflare.
+Pendiente antes de dar la fase 2 por cerrada: contratar el proveedor, apuntar el webhook y
+confirmar contra correos que lleguen de verdad.
 
 Estado del ciclo actual: setiembre es mes de déficit deliberado (`pct_ahorro = 0`, alertas
 apagadas, solo medición). Desde octubre el ingreso pasa a 7100 (2100 TWNSTUDIOS + 5000
@@ -207,8 +229,9 @@ supabase functions deploy gasto
 supabase secrets set SHORTCUT_TOKEN=...
 supabase db push
 
-cd worker && npm test           # parsers contra los correos reales
-cd worker && npx wrangler deploy
+npm test                        # parsers contra los correos reales
+supabase functions deploy correo
+supabase secrets set CORREO_TOKEN=...
 ```
 
 **`supabase link` falla** en este proyecto con `"Your account does not have the necessary
