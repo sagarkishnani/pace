@@ -20,7 +20,7 @@ import {
   cuerpo,
   leerPayload,
   permitido,
-  remitente,
+  remitentes,
 } from "../_shared/webhook.ts";
 
 // Cualquiera que sepa la dirección puede escribirle haciéndose
@@ -53,12 +53,12 @@ Deno.serve(async (req) => {
     return json({ error: "Payload ilegible" }, 400);
   }
 
-  const de = remitente(payload);
+  const de = remitentes(payload);
 
   // Los "ignorado" responden 200 a propósito: el proveedor reintenta
   // ante un error, y ninguno de estos casos se arregla reintentando.
   if (!permitido(de, Deno.env.get("REMITENTES"), REMITENTES)) {
-    console.log(`remitente rechazado: ${de ?? "(sin remitente)"}`);
+    console.log(`remitente rechazado: ${de.join(", ") || "(sin remitente)"}`);
     return json({ ok: true, ignorado: "remitente" });
   }
 

@@ -27,30 +27,41 @@ export function cuerpo(p: Payload): { crudo: string; esHtml: boolean } | null {
   return null;
 }
 
-// Viene como "BCP Notificaciones <notificaciones@...>" o pelado
-export function remitente(p: Payload): string | null {
-  const directo =
-    texto(sub(p, "FromFull")?.Email) ??
-    texto(p.From) ??
-    texto(p.sender) ??
-    texto(p.from) ??
-    texto(sub(p, "envelope")?.from) ??
-    texto(sub(p, "headers")?.from);
+const direccion = (v: unknown): string | null => {
+  const s = texto(v);
+  if (!s) return null;
+  // Viene como "BCP Notificaciones <notificaciones@...>" o pelado
+  return (s.match(/<([^>]+)>/)?.[1] ?? s).trim().toLowerCase();
+};
 
-  if (!directo) return null;
-  return (directo.match(/<([^>]+)>/)?.[1] ?? directo).trim().toLowerCase();
+// Devuelve TODOS los remitentes posibles, no uno.
+//
+// Al reenviar desde Gmail el sobre lleva tu dirección y la
+// cabecera From: la del banco. Quedarse con el primero que
+// aparezca hace que el reenvío se ignore en silencio, que es la
+// peor forma de fallar: no hay error, simplemente no llega nada.
+export function remitentes(p: Payload): string[] {
+  const h = sub(p, "headers");
+  const crudos = [
+    sub(p, "FromFull")?.Email,
+    p.From,
+    p.sender,
+    p.from,
+    sub(p, "envelope")?.from,
+    Array.isArray(h?.from) ? h?.from[0] : h?.from,
+  ];
+  return [...new Set(crudos.map(direccion).filter((d): d is string => d !== null))];
 }
 
 export function asunto(p: Payload): string {
   return texto(p.Subject) ?? texto(p.subject) ?? texto(sub(p, "headers")?.subject) ?? "(sin asunto)";
 }
 
-export function permitido(de: string | null, extra: string | undefined, base: string[]): boolean {
-  if (!de) return false;
+export function permitido(de: string[], extra: string | undefined, base: string[]): boolean {
   const lista = base.concat(
     (extra ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
   );
-  return lista.includes(de);
+  return de.some((d) => lista.includes(d));
 }
 
 export function autorizado(cabecera: string | null, esperado: string | undefined): boolean {
