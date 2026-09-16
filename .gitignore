@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# Supabase: estado local del CLI, incluye el ref del proyecto y la pooler URL
+supabase/.temp/
+supabase/.branches/
+
+# Secretos
+.env
+.env.*
+!.env.example
