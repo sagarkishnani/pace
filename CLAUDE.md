@@ -41,6 +41,20 @@ plata que acabas de sacar del ahorro.
 **Los documentos nunca crean un movimiento.** `documentos` (boletas, recibos) se enlazan
 a un movimiento existente o quedan en `pendiente` / `revisar`.
 
+**Las categorías tienen un vocabulario canónico y vive en el endpoint.** La lista está
+en `CATEGORIAS` dentro de `functions/gasto/index.ts`: `comida`, `restaurante`,
+`transporte`, `salud`, `hogar`, `personal`, `otro`. No hay tabla catálogo ni check
+constraint a propósito — el menú del Atajo está hardcodeado en iOS y no se sincroniza con
+la base, así que una tabla daría fricción sin ganar nada, y un constraint haría frágiles
+a los parsers de la fase 2. El endpoint es el único guardián. Los parsers de correo tienen
+que emitir estas mismas categorías al resolver `comercios.categoria`, si no el resumen
+sale partido en dos vocabularios.
+
+Una categoría desconocida **no rechaza el movimiento**: entra con `categoria` nula y el
+valor crudo queda en `raw.categoria_cruda`. Mismo criterio que `metodo`, que cae a
+`interbank`. El Atajo corre parado en una caja; perder el gasto es peor que perder el
+metadato.
+
 **Deduplicación por referencia del banco, no por hash.** `unique (banco, ref_operacion)`
 es la llave principal; `hash_origen` es solo respaldo para fuentes que no traen
 referencia (Yape, el Atajo). Reprocesar un correo debe ser inocuo.
@@ -81,9 +95,14 @@ primer ciclo con el sistema al 100% y con dos ciclos de datos reales detrás.
 ## El Atajo de iOS
 
 Se llama `Gasto`. Acciones: Pedir Número ("¿Cuánto?") → Elegir entre un menú
-(`interbank` / `efectivo` / `bcp`, en ese orden) → Obtener contenido de URL (POST) →
-Vibrar. **"Mostrar al ejecutar" desactivado** en la acción de red, si no iOS abre la app
-entera y el gesto se siente lento.
+(`interbank` / `efectivo` / `bcp`, en ese orden) → Elegir entre un menú (categoría) →
+Obtener contenido de URL (POST) → Vibrar. **"Mostrar al ejecutar" desactivado** en la
+acción de red, si no iOS abre la app entera y el gesto se siente lento.
+
+El menú de categoría es el tercer toque y es el que más riesgo tiene de romper el hábito.
+Si el gesto empieza a pasar de cinco segundos, la salida es recortar la lista o sacar el
+paso y categorizar en la reconciliación semanal — no aguantarse la fricción. El monto es
+lo único que no se puede posponer.
 
 Acceso: botón de la pantalla de bloqueo (reemplaza la cámara) y Centro de Control como
 respaldo. El objetivo es que el gesto completo dure menos de cinco segundos; si pasa de

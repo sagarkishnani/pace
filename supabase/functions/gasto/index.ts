@@ -3,7 +3,8 @@
 //
 // Body mínimo:  { "monto": 42.80 }
 // Body completo: { "monto": 42.80, "metodo": "interbank",
-//                  "comercio": "Tottus", "nota": "..." }
+//                  "categoria": "comida", "comercio": "Tottus",
+//                  "nota": "..." }
 //
 // Header: Authorization: Bearer <SHORTCUT_TOKEN>
 // ============================================================
@@ -15,6 +16,19 @@ const METODOS: Record<string, { banco: string; tipo: string }> = {
   bcp:       { banco: "BCP",       tipo: "credito" },
   efectivo:  { banco: "Efectivo",  tipo: "efectivo" },
 };
+
+// Vocabulario canónico de categorías. Los parsers de correo tienen que
+// usar estas mismas, si no el resumen por categoría sale partido en dos.
+// Solo gasto variable: los fijos y los servicios no pasan por acá.
+const CATEGORIAS = new Set([
+  "comida",       // mercado, bodega, supermercado
+  "restaurante",  // salir a comer, delivery
+  "transporte",   // taxi, combustible, pasajes
+  "salud",        // farmacia, consultas
+  "hogar",        // cosas para la casa
+  "personal",     // ropa, cortes, gym
+  "otro",
+]);
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -47,6 +61,17 @@ Deno.serve(async (req) => {
   const clave = String(body.metodo ?? "interbank").toLowerCase();
   const metodo = METODOS[clave] ?? METODOS.interbank;
 
+  // Una categoría que no reconozcamos no bota el registro: se guarda cruda
+  // en raw y el movimiento entra sin categoría, para resolverlo después.
+  // Estás parado en una caja cuando esto corre; perder el gasto es peor
+  // que perder la categoría.
+  const categoriaCruda = body.categoria == null
+    ? null
+    : String(body.categoria).trim().toLowerCase();
+  const categoria = categoriaCruda && CATEGORIAS.has(categoriaCruda)
+    ? categoriaCruda
+    : null;
+
   const db = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -64,11 +89,16 @@ Deno.serve(async (req) => {
       monto,
       moneda: String(body.moneda ?? "PEN"),
       comercio: body.comercio ?? null,
+      categoria,
       banco: metodo.banco,
       tipo: metodo.tipo,
       origen: "shortcut",
       confirmado: false,        // se confirma en la reconciliación semanal
-      raw: { nota: body.nota ?? null, recibido: new Date().toISOString() },
+      raw: {
+        nota: body.nota ?? null,
+        categoria_cruda: categoria ? null : categoriaCruda,
+        recibido: new Date().toISOString(),
+      },
     })
     .select("id")
     .single();
@@ -90,6 +120,7 @@ Deno.serve(async (req) => {
     id: mov.id,
     monto,
     metodo: metodo.banco,
+    categoria,
     disponible: e?.disponible ?? null,
     permitido_dia: e?.permitido_dia ?? null,
     estado: e?.estado ?? null,

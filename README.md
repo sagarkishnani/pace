@@ -114,18 +114,26 @@ Para un mes de solo medición, sin alertas: `pct_ahorro = 0` y `dia_inicio_eval 
 
 Nombre: **Gasto** (el nombre es también el comando de Siri).
 
-| # | Acción                  | Configuración                                        |
-|---|-------------------------|------------------------------------------------------|
-| 1 | Pedir entrada           | tipo Número, pregunta "¿Cuánto?"                     |
-| 2 | Elegir entre un menú    | `Interbank`, `Efectivo`, `BCP` → cada rama un Texto en minúscula |
-| 3 | Obtener contenido de URL| POST a tu endpoint                                    |
-| 4 | Vibrar                  |                                                       |
+| # | Acción                  | Configuración                                                    |
+|---|-------------------------|------------------------------------------------------------------|
+| 1 | Pedir entrada           | tipo Número, pregunta "¿Cuánto?"                                 |
+| 2 | Elegir entre un menú    | método: `Interbank`, `Efectivo`, `BCP`                           |
+| 3 | Elegir entre un menú    | categoría: `Comida`, `Restaurante`, `Transporte`, `Salud`, `Hogar`, `Personal`, `Otro` |
+| 4 | Obtener contenido de URL| POST a tu endpoint                                                |
+| 5 | Vibrar                  |                                                                   |
 
-En la acción 3:
+En los pasos 2 y 3, dentro de cada rama del menú va una acción **Texto** con el valor en
+minúscula (`interbank`, `comida`, …). Esos son los que entiende el endpoint. Pon primero
+lo que más usas: en iOS la primera opción queda bajo el pulgar.
+
+En la acción 4:
 
 - **Método**: `POST`
 - **Encabezados**: `Authorization` → `Bearer <tu token>` (ojo con el espacio)
-- **Cuerpo**: JSON con `monto` (el Número del paso 1) y `metodo` (el Texto del paso 2)
+- **Cuerpo**: JSON con tres campos
+  - `monto` → el Número del paso 1
+  - `metodo` → el Texto del paso 2
+  - `categoria` → el Texto del paso 3
 - **Desactiva "Mostrar al ejecutar"** — si no, iOS abre la app entera y el gesto se
   siente lento. Hazlo también en Vibrar.
 
@@ -133,16 +141,41 @@ Para abrirlo rápido: mantén presionada la pantalla de bloqueo → Personalizar
 bloqueada → reemplaza el botón de la cámara por el Atajo. Es el acceso más corto que hay;
 el Centro de Control sirve de respaldo.
 
-El gesto completo debería durar menos de cinco segundos. Si pasa de ahí, recorta el input.
+### Sobre el tercer paso
+
+Con la categoría el gesto pasa de dos toques a tres, y ese es el costo real del cambio.
+El presupuesto sigue siendo cinco segundos de punta a punta. Cronometra una semana antes
+de darlo por bueno.
+
+Si te frena, hay dos salidas antes de resignarte:
+
+- **Recortar la lista.** Siete opciones ya obligan a leer. Con cuatro o cinco eliges por
+  posición, sin leer, que es lo que hace rápido a un menú.
+- **Sacar el paso 3 y categorizar en la reconciliación semanal.** El endpoint acepta el
+  gasto sin `categoria` sin problema: entra con categoría nula y la pones después, en
+  frío y con el comercio a la vista. Registrar el monto es lo que no se puede posponer;
+  la categoría sí.
+
+Una categoría que el endpoint no reconozca **no bota el registro**: el gasto entra igual,
+sin categoría, y el valor crudo queda guardado en `raw.categoria_cruda`.
 
 ## Verificar
 
 ```sql
-select fecha, monto, banco, tipo, origen
+select fecha, monto, banco, tipo, categoria, origen
 from movimientos where origen = 'shortcut'
 order by fecha desc limit 5;
 
 select * from estado_ciclo();
+
+-- Gasto variable del ciclo por categoría
+select coalesce(categoria, 'sin categoría') as categoria,
+       count(*), sum(monto)
+from movimientos
+where periodo_id = ciclo_actual()
+  and fijo_id is null and servicio_id is null
+  and tipo <> 'consumo_monedero'
+group by 1 order by sum(monto) desc;
 ```
 
 ## API
@@ -151,11 +184,26 @@ select * from estado_ciclo();
 POST /functions/v1/gasto
 Authorization: Bearer <SHORTCUT_TOKEN>
 
-{ "monto": 42.80, "metodo": "interbank", "comercio": "Tottus", "nota": "..." }
+{ "monto": 42.80, "metodo": "interbank", "categoria": "comida",
+  "comercio": "Tottus", "nota": "..." }
 ```
 
-Solo `monto` es obligatorio; `metodo` cae a `interbank` por defecto. Responde con el id
-del movimiento y el estado del ciclo (`disponible`, `permitido_dia`, `estado`).
+| Campo       | Obligatorio | Por defecto                                  |
+|-------------|-------------|----------------------------------------------|
+| `monto`     | sí          | —                                            |
+| `metodo`    | no          | `interbank`; uno desconocido también cae ahí |
+| `categoria` | no          | nula; una desconocida cae a nula y se guarda en `raw.categoria_cruda` |
+| `comercio`  | no          | nulo                                         |
+| `moneda`    | no          | `PEN`                                        |
+| `nota`      | no          | nula                                         |
+
+Categorías válidas: `comida`, `restaurante`, `transporte`, `salud`, `hogar`, `personal`,
+`otro`. Son solo de gasto variable — los fijos y los servicios no pasan por acá. Si
+cambias la lista, cámbiala en `CATEGORIAS` dentro de `supabase/functions/gasto/index.ts`
+y en el menú del Atajo; las dos tienen que decir lo mismo.
+
+Responde con el id del movimiento, la categoría con la que quedó, y el estado del ciclo
+(`disponible`, `permitido_dia`, `estado`).
 
 ## Estado
 
