@@ -42,7 +42,11 @@ supabase/
   migrations/002_ciclos.sql    abrir_ciclo, cerrar_ciclo, estado_ciclo
   migrations/003_matching.sql  normalización, enlace de servicios, triggers
   migrations/004_comercios.sql catálogo de comercios
+  migrations/005_worker.sql    ajustes de los correos reales
   functions/gasto/index.ts     POST /gasto — endpoint del Atajo
+worker/
+  src/                         parsers de correo (Cloudflare Email Worker)
+  test/                        los cuatro correos reales como fixtures
 ```
 
 ## Requisitos
@@ -207,6 +211,52 @@ y en el menú del Atajo; las dos tienen que decir lo mismo.
 Responde con el id del movimiento, la categoría con la que quedó, y el estado del ciclo
 (`disponible`, `permitido_dia`, `estado`).
 
+## El Worker de correo
+
+Recibe las notificaciones del banco, las parsea e inserta en `movimientos`. El
+enriquecimiento —enlazar el servicio, normalizar el comercio, poner la categoría— lo hace
+la base sola.
+
+Cubre cuatro formatos:
+
+| Correo          | Remitente                              | Llave que aporta        |
+|-----------------|----------------------------------------|-------------------------|
+| BCP tarjeta     | `notificaciones@notificacionesbcp.com.pe` | 4 dígitos y comercio |
+| Yape servicios  | `notificaciones@yape.pe`               | código de usuario       |
+| Yape P2P        | `notificaciones@yape.pe`               | beneficiario + celular  |
+| Plin            | `servicioalcliente@netinterbank.com.pe`| código de operación     |
+
+**Probar los parsers** (no necesita `npm install`):
+
+```bash
+cd worker && npm test
+```
+
+**Desplegar:**
+
+```bash
+cd worker
+npm install
+npx wrangler secret put SUPABASE_URL
+npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+npx wrangler deploy
+```
+
+Después, en el panel de Cloudflare: **Email → Email Routing → Routes**, y apunta una
+dirección al Worker `pace-correos`. Esa es la dirección a la que reenvías desde Gmail con
+un filtro por remitente.
+
+**Si reenvías desde Gmail**, el sobre del correo lleva tu dirección y no la del banco, así
+que el Worker lo va a rechazar. Agrega la tuya:
+
+```bash
+npx wrangler secret put REMITENTES     # tu@gmail.com
+```
+
+El filtro de remitente existe porque cualquiera que sepa la dirección puede mandarle un
+correo haciéndose pasar por el banco. El daño máximo es un movimiento inventado —que
+además aparece en `sin_resolver()`— pero no cuesta nada cerrar la puerta.
+
 ## Consultas de la reconciliación semanal
 
 ```sql
@@ -218,10 +268,12 @@ select enlazar_documentos();         -- amarra boletas sueltas a sus movimientos
 ## Estado
 
 - [x] **Fase 1** — esquema, motor de ciclos, endpoint y Atajo
-- [x] **Fase 2a** — motor de matching en la base (migraciones 003 y 004)
-- [ ] **Fase 2b** — Cloudflare Email Worker con los parsers (BCP, Yape servicios, Yape P2P, Plin)
+- [x] **Fase 2** — matching en la base y Worker con los cuatro parsers
 - [ ] **Fase 3** — resumen diario y frontend
 
-La 2b necesita los cuerpos reales de los cuatro correos para escribir los regexes. El
-motor de matching ya está listo y no depende de ellos: el Worker solo tiene que insertar
-en `movimientos` con `codigo_usuario`, `empresa` y `destinatario` dentro de `raw`.
+Falta desplegar el Worker y verlo con correos que lleguen de verdad. Los parsers están
+probados contra los cuatro formatos reales, pero sobre el texto ya renderizado, no sobre
+el MIME crudo que entrega Cloudflare. Ahí es donde puede aparecer la primera sorpresa.
+
+Con las cinco fuentes de correo andando, el único gasto que sigue dependiendo de que te
+acuerdes es el consumo con tarjeta Interbank.

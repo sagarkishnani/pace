@@ -12,7 +12,13 @@ supabase/
   migrations/002_ciclos.sql    abrir_ciclo, cerrar_ciclo, estado_ciclo
   migrations/003_matching.sql  normalización, enlace de servicios, triggers
   migrations/004_comercios.sql catálogo de comercios (datos, no lógica)
+  migrations/005_worker.sql    ajustes que salieron de los correos reales
   functions/gasto/index.ts     POST /gasto — endpoint del Atajo de iOS
+worker/
+  src/texto.ts                 normalización de correo y extracción de campos
+  src/parsers.ts               los cuatro parsers
+  src/index.ts                 handler de Cloudflare Email Worker
+  test/correos.ts              los cuatro correos reales, literales
 ```
 
 No es un repo git. El README que se mencionó en el diseño nunca llegó al disco.
@@ -103,6 +109,47 @@ equivocado es más caro que uno faltante: el faltante se ve, el equivocado no.
 **`recibos_pendientes()` es lo único que avisa por algo que no pasó** — un servicio cuyo
 `vence_el` ya pasó y no tiene movimiento en el ciclo.
 
+## El Worker de correo
+
+Cloudflare Email Worker. Parsea e inserta, nada más — todo lo demás lo hacen los triggers.
+
+**Los parsers deciden por contenido, no por remitente.** Los bancos cambian de dominio de
+envío más seguido que de plantilla. El remitente solo se usa como filtro de seguridad.
+
+**Todo se compara sin tildes.** No es capricho: el propio correo del BCP advierte que las
+tildes y las ñ pueden salir cambiadas según el cliente de correo. Buscar `"Código"` literal
+es apostar a que el render salió bien.
+
+**`banco` guarda el sistema de origen, no la cuenta.** `BCP`, `Yape`, `Plin`, `Interbank`,
+`Efectivo`. Eso mantiene limpio el espacio de numeración del índice único
+`(banco, ref_operacion)`: un Nº de operación de Yape y uno de tarjeta BCP pueden coincidir
+sin ser el mismo gasto.
+
+**Los cuatro correos traen número de operación**, así que la deduplicación siempre va por
+referencia. El hash es red de seguridad, no el camino normal.
+
+**Un 23505 cuenta como éxito.** Cloudflare reintenta ante un error y un duplicado no es un
+fallo: si se lanzara, el reintento quedaría en bucle.
+
+**Yape P2P trae los últimos dígitos del celular del beneficiario.** El nombre llega
+truncado (`Antuanet Var*`) y solo se presta a colisiones; la llave de `destinatarios` es
+`nombre #sufijo`. El nombre legible va aparte en `destinatario_nombre`, que es lo que
+termina en el alias.
+
+**Plin llega por Interbank pero no cierra el agujero de Interbank.** Ese correo solo cubre
+transferencias Plin; el consumo con tarjeta Interbank sigue sin canal y sigue dependiendo
+del Atajo.
+
+### Correr los tests
+
+```bash
+cd worker && npm test
+```
+
+No necesita `npm install`: los tests solo tocan `texto.ts` y `parsers.ts`, y corren con el
+soporte nativo de TypeScript de Node 22. Las fixtures son los cuatro correos reales, tal
+cual llegan — su valor está en que son literales, así que no los edites al refactorizar.
+
 ## Captura de gastos por fuente
 
 | Fuente            | Cómo entra                                  |
@@ -120,11 +167,14 @@ Atajo hay que atraparlo en la reconciliación semanal. Por eso el match de servi
 
 ## Fases
 
-1. **Actual** — Atajo de iOS + `/gasto`. Se usa dos semanas antes de construir nada más.
-   El orden es a propósito: la entrada manual es la única pieza que depende de cambiar un
-   hábito, y si va a fallar conviene que falle ahora y no con el pipeline ya construido.
-2. Worker con los cuatro parsers de correo (BCP, Yape servicios, Yape P2P, Plin).
-3. Frontend / resumen diario.
+1. **Hecho** — Atajo de iOS + `/gasto`.
+2. **Hecho** — motor de matching en la base y Worker con los cuatro parsers.
+3. Resumen diario y frontend.
+
+Pendiente antes de dar la fase 2 por cerrada: desplegar el Worker y confirmar contra
+correos que lleguen de verdad. Los parsers están probados contra los cuatro formatos
+reales, pero sobre el texto ya renderizado — no sobre el MIME crudo que entrega
+Cloudflare.
 
 Estado del ciclo actual: setiembre es mes de déficit deliberado (`pct_ahorro = 0`, alertas
 apagadas, solo medición). Desde octubre el ingreso pasa a 7100 (2100 TWNSTUDIOS + 5000
@@ -156,6 +206,9 @@ mismo nombre en Supabase. El token nunca va al repo.
 supabase functions deploy gasto
 supabase secrets set SHORTCUT_TOKEN=...
 supabase db push
+
+cd worker && npm test           # parsers contra los correos reales
+cd worker && npx wrangler deploy
 ```
 
 **`supabase link` falla** en este proyecto con `"Your account does not have the necessary
