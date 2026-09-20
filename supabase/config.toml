@@ -391,6 +391,9 @@ verify_jwt = false
 [functions.alerta]
 verify_jwt = false
 
+[functions.accion]
+verify_jwt = false
+
 [functions.correo]
 verify_jwt = false
 

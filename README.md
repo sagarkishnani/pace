@@ -54,6 +54,9 @@ supabase/
   migrations/004_comercios.sql catálogo de comercios
   migrations/005_worker.sql    ajustes de los correos reales
   migrations/006_panel.sql     débito/crédito, panel(), alertas, ingresos
+  migrations/007_atipico.sql   ciclos no comparables, simulación de ahorro
+  migrations/008_acciones.sql  las escrituras del panel
+  functions/accion/index.ts    POST /accion   — escrituras del panel
   functions/gasto/index.ts     POST /gasto    — Atajo "Gasto"
   functions/ingreso/index.ts   POST /ingreso  — Atajo "Ingreso"
   functions/resumen/index.ts   GET  /resumen  — lo que lee el panel
@@ -285,8 +288,18 @@ gasto acumulado contra el plan y contra dónde llegas al ritmo actual, el repart
 categoría, cuánto llega después como estado de cuenta, fijos y servicios pendientes, los
 movimientos del ciclo y el sobrante barrido al ahorro por cada ciclo cerrado.
 
-Es de **solo lectura**. Las correcciones —categorías, confirmaciones, enlaces— siguen
-yendo por el SQL Editor en la reconciliación semanal.
+Y **escribe**. Cuatro operaciones, que son las que antes obligaban a abrir el SQL Editor:
+
+| En el panel | Qué hace |
+|---|---|
+| **Reglas** (cabecera) | Cambia el % de ahorro con un deslizador que muestra los soles por día antes de guardar, el monto a la esposa, desde qué día evaluar y si las alertas están encendidas. Deja rastro en `nota_edicion`. |
+| **Cerrar este ciclo y empezar el siguiente** | El ritual del día 1 en una llamada: cierra el anterior barriendo el sobrante al ahorro, abre el nuevo, registra los ingresos que ya sabes que vienen —precargados del ciclo anterior— y fija el porcentaje. |
+| **Pagar** (en cada fijo o servicio) | Registra el pago *enlazado*, así que no toca la bolsa: ya estaba descontado desde el día 1. En un servicio adelanta el vencimiento un mes y el estimado pasa a seguir tus últimos tres pagos. |
+| **+ Fijo / + Servicio**, y tocar el nombre | Alta y edición de montos, día y vencimiento. No borran: desactivan. |
+| **+ Registrar ingreso** | Para lo no previsto: un extra o un retiro de ahorros. |
+
+Las correcciones de movimientos —categorías, confirmaciones, enlaces— siguen yendo por el
+SQL Editor en la reconciliación semanal.
 
 **Desplegar:**
 
@@ -294,6 +307,7 @@ yendo por el SQL Editor en la reconciliación semanal.
 openssl rand -hex 24                        # token del panel, distinto al del Atajo
 supabase secrets set PANEL_TOKEN=<el token>
 supabase functions deploy resumen
+supabase functions deploy accion
 ```
 
 Un token propio del panel porque vive en el navegador del celular, que es un sitio más
@@ -380,6 +394,62 @@ update config_ciclo set alertas_activas = false where periodo_id = ciclo_actual(
 
 Es más claro que el truco de `dia_inicio_eval = 99`, que sigue funcionando igual.
 
+## Elegir el % de ahorro
+
+El porcentaje es la perilla, pero no es el número que se vive. El que se vive es cuánto
+puedes gastar hoy. Estas dos funciones traducen entre los dos **antes** de abrir el ciclo,
+que es cuando todavía se puede cambiar de idea.
+
+Los fijos, los servicios y el monto de la esposa salen de lo que ya está cargado si no los
+pasas.
+
+```sql
+-- Qué te deja cada porcentaje, con el ingreso que esperas
+select * from simular_ciclo(7300);
+
+--  pct_ahorro | ahorro  |  bolsa  | por_dia | por_semana
+-- ------------+---------+---------+---------+------------
+--          20 | 1460.00 | 2620.00 |   87.33 |     611.33
+--          25 | 1825.00 | 2255.00 |   75.17 |     526.17
+--          30 | 2190.00 | 1890.00 |   63.00 |     441.00
+```
+
+```sql
+-- El camino inverso: sé cuánto gasto al día, ¿cuánto puedo ahorrar?
+select * from pct_ahorro_para(7300, 85);
+
+-- pct_ahorro | ahorro  |  bolsa  | por_dia | nota
+-- -----------+---------+---------+---------+-------------------------------------
+--      20.96 | 1530.00 | 2550.00 |   85.00 | Viable: 20.96% al ahorro (S/ 1,530…)
+```
+
+Un porcentaje que rompes cada quincena ahorra menos que uno más chico que cumples: el
+sobrante se barre al ahorro igual en `cerrar_ciclo()`, así que los meses buenos devuelven
+la diferencia solos.
+
+Argumentos opcionales en las dos: `p_dias` (30), `p_esposa`, `p_fijos`, `p_servicios`.
+
+## Ciclos atípicos
+
+Un ciclo puede ser real y aun así no ser comparable — un mes en que saldaste deudas
+viejas, o en que las reglas todavía no estaban fijadas.
+
+```sql
+update periodos set atipico = true where id = '<uuid>';
+```
+
+Qué cambia:
+
+- **Sigue en el histórico**, dibujado en gris y con la nota puesta. Esconderlo sería
+  mentir: el mes existió y la plata salió.
+- **No entra en promedios.**
+- **No siembra la config del siguiente.** `abrir_ciclo()` copia del último ciclo no
+  atípico; si no hay ninguno, usa los valores por defecto. Sin esto, un mes con
+  `pct_ahorro = 0` dejaba al ciclo siguiente naciendo sin ahorro y sin alertas.
+
+Los movimientos del ciclo no se tocan: el hábito de registrar vale igual, y esos datos
+siguen ahí si algún día los quieres mirar.
+
 ## Verificar
 
 ```sql
@@ -461,6 +531,34 @@ cerrado. Responde con CORS abierto.
 Existe en vez de pegarle a PostgREST desde el navegador porque RLS está activo sin
 políticas públicas: la `anon key` no lee nada, y la `service_role` key no se pone en un
 navegador jamás.
+
+### `POST /accion` — las escrituras del panel
+
+```
+Authorization: Bearer <PANEL_TOKEN>
+
+{ "accion": "pago", "clase": "servicio", "id": "<uuid>", "monto": 151.40,
+  "metodo": "bcp_debito" }
+```
+
+| `accion` | Campos | Función de Postgres |
+|---|---|---|
+| `ingreso` | `monto`, `fuente`, `clase` | `registrar_ingreso` (nunca rota desde el panel) |
+| `pago` | `clase` (`fijo`/`servicio`), `id`, `monto`, `metodo` | `registrar_pago` |
+| `rotar` | `confirmar: true`, `inicio`, `etiqueta`, `ingresos[]`, `config{}` | `rotar_ciclo` |
+| `config` | `pct_ahorro`, `monto_esposa`, `dia_inicio_eval`, `alertas_activas`, `nota` | `actualizar_config` |
+| `fijo` | `id` (nulo crea), `nombre`, `monto`, `dia_aprox`, `activo` | `guardar_fijo` |
+| `servicio` | `id`, `nombre`, `estimado`, `dia_aprox`, `vence_el`, `activo` | `guardar_servicio` |
+| `simular` | — | `simular_actual` (el abanico del deslizador) |
+
+El despacho es una allowlist explícita: sin ella, un body con `accion: "cerrar_ciclo"`
+llamaría cualquier función de la base con la `service_role` key. `rotar` además exige
+`confirmar: true`, porque cierra el ciclo y barre el sobrante al ahorro y eso no se
+deshace.
+
+Ninguna acción borra: los fijos y servicios se desactivan. Un movimiento viejo enlazado a
+un servicio borrado perdería el enlace y volvería a contar como gasto variable de un ciclo
+ya cerrado.
 
 ### `POST /alerta` — el cron
 

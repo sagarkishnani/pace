@@ -14,6 +14,9 @@ supabase/
   migrations/004_comercios.sql catálogo de comercios (datos, no lógica)
   migrations/005_worker.sql    ajustes que salieron de los correos reales
   migrations/006_panel.sql     débito/crédito, hoy_lima, panel(), alertas, ingresos
+  migrations/007_atipico.sql   ciclos no comparables y simulación de % de ahorro
+  migrations/008_acciones.sql  las escrituras del panel
+  functions/accion/index.ts    POST /accion   — escrituras del panel
   functions/gasto/index.ts     POST /gasto    — Atajo "Gasto"
   functions/ingreso/index.ts   POST /ingreso  — Atajo "Ingreso"
   functions/resumen/index.ts   GET  /resumen  — lo que lee el panel
@@ -34,10 +37,28 @@ test/
 
 Estas decisiones no se deducen leyendo el SQL. Respetarlas antes de cambiar nada.
 
-**El ciclo va de cobro a cobro, no de mes calendario.** Se abre cuando se confirma el
-ingreso principal (`ingresos.principal = true and confirmado`), no cuando el calendario
-dice que toca. Si el sueldo llega tarde, el ciclo anterior simplemente se estira — que es
-lo que pasa en la realidad. Solo puede haber un ciclo abierto (`ux_periodo_abierto`).
+**El motor no impone cuándo empieza un ciclo.** `abrir_ciclo(p_inicio)` acepta cualquier
+fecha; solo puede haber uno abierto (`ux_periodo_abierto`). Quién decide la fecha es una
+elección del dueño, y desde octubre 2026 es **el calendario, no el cobro**:
+
+- *Cobro a cobro* (el diseño original, `registrar_ingreso` con clase `sueldo`): el ciclo
+  se abre cuando cae el ingreso principal. Protege del caso en que el sueldo no llega y el
+  motor te dice "mes nuevo, presupuesto nuevo" estando sin plata.
+- *Calendario* (lo que se usa hoy): se cierra y abre con dos líneas de SQL el día 1. Se
+  eligió porque los dos sueldos caen a fin de mes, y rotar ahí habría metido todo octubre
+  dentro del ciclo atípico de setiembre — se perdía un mes entero de medición. La
+  incertidumbre que la regla original protegía no aplica: son dos ingresos fijos y
+  conocidos.
+
+**Los ingresos se registran por adelantado.** Con ciclos de calendario, el sueldo entra
+como `confirmado = true` el día 1 con `nota = 'esperado'`, antes de caer. No es tan raro
+como suena: la bolsa nunca fue el saldo de la cuenta — ya resta el alquiler antes de
+pagarlo y los servicios como estimados. Mide *margen*, no caja. El riesgo que queda es que
+un sueldo llegue corto y el motor no se entere; se verifica el monto al cobrar.
+
+**Corolario: no usar el Atajo Ingreso para el sueldo.** Ya está registrado; mandarlo otra
+vez duplica el ingreso e infla la bolsa. El Atajo queda para `extra` y `retiro`. Se ve en
+la tarjeta de ingresos del panel, que lista cada fila.
 
 **La configuración se congela al abrir el ciclo.** `config_ciclo` es por periodo, no
 global. Editarla a mitad de camino recalcula al momento y deja rastro (`editado_en`,
@@ -61,6 +82,16 @@ extracto.
 **El día lo decide Lima, no UTC.** `hoy_lima()`, no `current_date`. En un servidor UTC el
 día cambia a las 7 de la noche de Lima: un gasto de la cena caía en el día siguiente y el
 contador de días del ciclo se adelantaba toda la tarde — justo el número que más se mira.
+
+**Un ciclo puede ser real y aun así no comparable.** `periodos.atipico` marca eso.
+Setiembre 2026 fue el caso que lo motivó: se saldaron deudas viejas (~10k de tarjeta), el
+monto a la esposa todavía no estaba fijado y el alquiler se pagó aparte. Los movimientos
+son ciertos y el hábito de registrar vale, pero promediar ese mes contra uno normal no
+dice nada. Un ciclo atípico **sigue en el histórico, marcado** —esconderlo sería mentir,
+el mes existió y la plata salió— pero no entra en promedios y **no siembra la config del
+siguiente**: `abrir_ciclo()` copia del último ciclo no atípico, y si no hay ninguno usa
+los valores por defecto de la tabla. Sin eso, un mes de limpieza de deudas con
+`pct_ahorro = 0` dejaba al ciclo siguiente naciendo sin ahorro y sin alertas.
 
 **Retirar de ahorros no es ingreso.** `ingresos.es_retiro = true` suma a la caja
 disponible pero no entra al cálculo del ahorro — si no, el motor "ahorraría" el 30% de
@@ -155,9 +186,38 @@ navegador, que es exactamente lo que no se hace nunca. `/resumen` usa `PANEL_TOK
 token propio —el navegador del celular está más expuesto que el Atajo y rotarlo no obliga
 a reconfigurar el iPhone.
 
-**El panel es de solo lectura.** Las correcciones siguen yendo por el SQL Editor en la
-reconciliación semanal. Agregar escrituras significa otro endpoint y más superficie; la
-decisión fue esperar a que la falta se sienta.
+**El panel escribe desde la migración 008.** Cuatro operaciones, cada una una función de
+Postgres detrás de `POST /accion`: registrar ingresos y pagos, empezar un ciclo, cambiar
+las reglas, y dar de alta o editar fijos y servicios. La lógica no vive en el navegador
+por lo mismo que los números: si "pagar un servicio" se implementara en el panel habría
+dos versiones de la regla y la del celular sería la que se usa.
+
+**`/accion` despacha contra una allowlist explícita.** Sin ella, un body con
+`accion: "cerrar_ciclo"` llamaría cualquier función de la base con la `service_role` key.
+
+**Rotar exige `confirmar: true` en el cuerpo.** Cierra el ciclo y barre el sobrante al
+ahorro; no se deshace. Un toque perdido no puede costar un ciclo.
+
+**Ninguna acción borra.** Los fijos y servicios se desactivan (`activo = false`). Un
+movimiento viejo enlazado a un servicio borrado perdería el enlace y volvería a contar
+como gasto variable de un ciclo ya cerrado.
+
+**`rotar_ciclo()` hace el ritual del día 1 en una transacción**: cierra, abre, registra
+los ingresos esperados y fija las reglas. Va junto porque a medio camino el estado es
+incoherente — un ciclo abierto sin ingresos tiene la bolsa en negativo y sale rojo.
+
+**El deslizador del % pide `simular_actual()` una vez y luego solo indexa.** El número que
+se ve al mover el dedo sale de `simular_ciclo()` en Postgres, no de una fórmula repetida
+en el navegador. Por eso los pasos son de 5 en 5: son los que devuelve esa función.
+
+**`registrar_ingreso()` acepta `p_rotar`.** El panel manda `false` para registrar un
+sueldo como principal sin disparar una rotación — con ciclos de calendario el ciclo lo
+abre `rotar_ciclo()`. El Atajo de iOS no manda nada y conserva el comportamiento de
+siempre.
+
+**Pagar un servicio adelanta `vence_el` un mes y llama a `recalcular_estimados()`.** Sin
+lo primero, `recibos_pendientes()` vuelve a gritar por el recibo del mes pasado apenas
+empieza el ciclo siguiente.
 
 **`web/index.html` no tiene dependencias ni build.** Los gráficos son SVG escrito a mano.
 Una librería de charts pesa más que todo el archivo y hay que mantenerla al día.
@@ -306,10 +366,27 @@ Atajo hay que atraparlo en la reconciliación semanal.
 3. **Hecho** — débito vs crédito, Atajo de ingresos, panel (`web/index.html`) y alertas
    por webhook.
 
-Estado del ciclo actual: setiembre es mes de déficit deliberado (`pct_ahorro = 0`, alertas
-apagadas, solo medición). Desde octubre el ingreso pasa a 7100 (2100 TWNSTUDIOS + 5000
-oficina), alquiler 2320 fijo, 500 a la esposa, servicios ~400 estimados. Noviembre es el
-primer ciclo con el sistema al 100% y con dos ciclos de datos reales detrás.
+Estado del ciclo actual: **setiembre 2026 está marcado `atipico = true`** — se saldaron
+deudas viejas (~10k de tarjeta), el monto a la esposa no estaba fijado y el alquiler se
+pagó aparte. Se sigue registrando por el hábito, con `pct_ahorro = 0`, `alertas_activas =
+false` y `dia_inicio_eval = 99`. No sirve de línea base y no siembra la config de octubre.
+
+**Octubre 2026 es el primer ciclo real**, del 1 al 31, abierto por calendario:
+
+| | |
+|---|---|
+| Ingreso | 7100 — 5000 oficina (principal) + 2100 TWNSTUDIOS, registrados por adelantado |
+| `pct_ahorro` | **20%** → S/ 1,420. Empezar bajo y subir si el mes sale holgado; un % que se rompe cada quincena ahorra menos que uno que se cumple |
+| `monto_esposa` | 500 |
+| Fijos (2350) | Alquiler 2200, Mantenimiento 150 |
+| Servicios (1068) | USIL 783, Luz 144, Internet 99, Teléfono 42 |
+| **Bolsa** | **1762** → S/ 56.84 al día, S/ 398 a la semana |
+
+USIL va en `servicios` y no en `fijos` aunque el monto no varíe: lo que se quiere es la
+alerta de `recibos_pendientes()`, porque atrasarse cuesta caro.
+
+Si USIL termina, `update servicios set activo = false where nombre = 'USIL'` y la bolsa
+sube 783 desde el ciclo siguiente.
 
 ## Los Atajos de iOS
 

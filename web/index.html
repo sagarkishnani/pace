@@ -229,6 +229,87 @@
     background: var(--serie-1); color: #fff;
   }
   .error { color: var(--grave-txt); font-size: 13px; margin-top: 12px; }
+
+  /* ---------- acciones: hoja, formulario, aviso ---------- */
+  .velo {
+    position: fixed; inset: 0; z-index: 40;
+    background: rgba(0,0,0,.4);
+    display: flex; align-items: flex-end; justify-content: center;
+    opacity: 0; transition: opacity .14s;
+  }
+  .velo.visible { opacity: 1; }
+  @media (min-width: 640px) { .velo { align-items: center; } }
+
+  .hoja {
+    background: var(--superficie); color: var(--tinta);
+    width: 100%; max-width: 460px;
+    border-radius: 16px 16px 0 0;
+    padding: 20px 18px calc(20px + env(safe-area-inset-bottom));
+    max-height: 88vh; overflow-y: auto;
+    transform: translateY(14px); transition: transform .14s;
+    border: 1px solid var(--borde);
+  }
+  .velo.visible .hoja { transform: none; }
+  @media (min-width: 640px) { .hoja { border-radius: 16px; } }
+
+  .hoja h3 { margin: 0 0 4px; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .hoja .intro { color: var(--tinta-2); font-size: 13px; margin: 0 0 18px; }
+
+  .campo { margin-bottom: 14px; }
+  .campo label { display: block; font-size: 12px; color: var(--tinta-2); margin-bottom: 5px; }
+  .campo input, .campo select {
+    width: 100%; font: inherit; font-size: 16px;   /* 16px: menos y iOS hace zoom al enfocar */
+    padding: 10px 12px; color: var(--tinta);
+    background: var(--plano); border: 1px solid var(--borde); border-radius: 9px;
+  }
+  .campo input[type="range"] { padding: 0; background: none; border: 0; accent-color: var(--serie-1); }
+  .campo .pista-ayuda { font-size: 12px; color: var(--tinta-3); margin-top: 5px; }
+  .par { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  .vista-previa {
+    background: var(--plano); border: 1px solid var(--borde);
+    border-radius: 10px; padding: 12px 14px; margin: 4px 0 16px;
+  }
+  .vista-previa .grande {
+    font-size: 26px; font-weight: 600; letter-spacing: -.02em;
+  }
+  .vista-previa .detalle { font-size: 12px; color: var(--tinta-2); margin-top: 3px; }
+
+  .botones { display: flex; gap: 10px; margin-top: 20px; }
+  .botones button {
+    flex: 1; font: inherit; font-weight: 500; font-size: 15px;
+    padding: 11px; border-radius: 9px; cursor: pointer; border: 1px solid var(--borde);
+    background: var(--plano); color: var(--tinta-2);
+  }
+  .botones button.principal { background: var(--serie-1); color: #fff; border-color: transparent; }
+  .botones button.peligro   { background: var(--grave);   color: #fff; border-color: transparent; }
+  .botones button[disabled]  { opacity: .55; cursor: default; }
+
+  .aviso {
+    position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 8px);
+    z-index: 60; max-width: 90vw;
+    background: var(--tinta); color: var(--plano);
+    padding: 10px 16px; border-radius: 10px; font-size: 13px;
+    opacity: 0; transition: opacity .16s, transform .16s;
+  }
+  .aviso.visible { opacity: 1; transform: translate(-50%, 0); }
+  .aviso.malo { background: var(--grave); color: #fff; }
+
+  /* Filas editables */
+  .fila-pend.tocable { cursor: pointer; }
+  .fila-pend.tocable:hover { color: var(--serie-1); }
+  .pastilla {
+    font: inherit; font-size: 11px; font-weight: 500;
+    padding: 3px 9px; margin-left: 8px; cursor: pointer;
+    border-radius: 999px; border: 1px solid var(--borde);
+    background: var(--plano); color: var(--tinta-2);
+  }
+  .pastilla:hover { color: var(--serie-1); border-color: var(--serie-1); }
+  .agregar {
+    font: inherit; font-size: 12px; color: var(--tinta-2); cursor: pointer;
+    background: none; border: 0; padding: 10px 0 0;
+  }
+  .agregar:hover { color: var(--serie-1); }
   [hidden] { display: none !important; }
 </style>
 </head>
@@ -251,6 +332,7 @@
     <span class="ciclo" id="h-ciclo"></span>
     <span class="empuje">
       <span id="h-estado"></span>
+      <button class="chico" data-acc="reglas" title="Reglas del ciclo">Reglas</button>
       <button class="chico" id="b-tema" title="Claro / oscuro">◐</button>
       <button class="chico" id="b-refrescar">Actualizar</button>
     </span>
@@ -280,9 +362,19 @@ const soles0 = (n) => "S/ " + nf0(n);
 const mayus = (s) => String(s ?? "").charAt(0).toUpperCase() + String(s ?? "").slice(1);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
+// Una fecha sin hora ("2026-10-10") el navegador la parsea como
+// UTC medianoche, y en Lima eso es el día anterior a las 7 p. m.
+// Los vencimientos y los días del ciclo salían corridos un día.
+// Con las marcas de tiempo completas no pasa: esas sí traen zona.
+const SOLO_FECHA = /^\d{4}-\d{2}-\d{2}$/;
 const dia = (iso) => {
-  const d = new Date(iso);
-  return d.toLocaleDateString("es-PE", { day: "numeric", month: "short", timeZone: "America/Lima" });
+  const s = String(iso ?? "");
+  if (SOLO_FECHA.test(s)) {
+    return new Date(s + "T12:00:00")
+      .toLocaleDateString("es-PE", { day: "numeric", month: "short" });
+  }
+  return new Date(s)
+    .toLocaleDateString("es-PE", { day: "numeric", month: "short", timeZone: "America/Lima" });
 };
 const hora = (iso) =>
   new Date(iso).toLocaleTimeString("es-PE", { hour: "numeric", minute: "2-digit", timeZone: "America/Lima" });
@@ -495,6 +587,7 @@ function graficoMetodo(cont, e, filas) {
 // ------------------------------------------------------------
 function graficoHistorial(cont, filas) {
   if (!filas.length) { cont.innerHTML = '<p class="vacio">Todavía no hay ciclos cerrados. Aparecen cuando registres el siguiente sueldo.</p>'; return; }
+  const hayAtipicos = filas.some((f) => f.atipico);
   const ancho = Math.max(cont.clientWidth, 280);
   const alto = 180;
   const x0 = PAD.izq, x1 = ancho - PAD.der, y0 = PAD.arriba, y1 = alto - PAD.abajo;
@@ -513,15 +606,25 @@ function graficoHistorial(cont, filas) {
     const v = Number(f.sobrante) || 0;
     const h = (v / max) * (y1 - y0);
     const x = x0 + banda * (i + 0.5) - grosor / 2;
+    // Un ciclo atípico se dibuja en gris y no en el color de la
+    // serie: sigue estando —el mes existió y la plata salió— pero
+    // no se puede comparar contra uno normal.
+    const tinte = f.atipico ? "var(--tinta-3)" : "var(--serie-1)";
     s += `<path d="M${x},${y1} L${x},${(y1 - h + 4).toFixed(1)} Q${x},${(y1 - h).toFixed(1)} ${x + 4},${(y1 - h).toFixed(1)}
           L${x + grosor - 4},${(y1 - h).toFixed(1)} Q${x + grosor},${(y1 - h).toFixed(1)} ${x + grosor},${(y1 - h + 4).toFixed(1)}
-          L${x + grosor},${y1} Z" fill="var(--serie-1)"><title>${esc(f.etiqueta)}: ${soles(v)} al ahorro</title></path>`;
+          L${x + grosor},${y1} Z" fill="${tinte}"><title>${esc(f.etiqueta)}: ${soles(v)} al ahorro${f.atipico ? " (ciclo atípico, no comparable)" : ""}</title></path>`;
     s += `<text x="${(x + grosor / 2).toFixed(1)}" y="${(y1 - h - 7).toFixed(1)}" text-anchor="middle"
           font-size="11" fill="var(--tinta-2)">${nf0(v)}</text>`;
   });
 
   cont.innerHTML = `<svg viewBox="0 0 ${ancho} ${alto}" width="${ancho}" height="${alto}" role="img"
-    aria-label="Sobrante barrido al ahorro por ciclo cerrado">${s}</svg>`;
+    aria-label="Sobrante barrido al ahorro por ciclo cerrado">${s}</svg>` +
+    (hayAtipicos
+      ? `<p class="sutil" style="margin:10px 0 0">
+           Las barras grises son ciclos <b>atípicos</b>: reales, pero no comparables
+           (deudas viejas, reglas sin fijar). Quedan en el registro y no entran en promedios.
+         </p>`
+      : "");
 }
 
 // ============================================================
@@ -533,11 +636,20 @@ function pintar(d) {
   ultimo = d;
   const e = d.estado;
   if (!e) {
-    $("#cuerpo").innerHTML = `<div class="tarjeta"><h2>Sin ciclo abierto</h2>
-      <p class="vacio">Registra tu sueldo desde el Atajo <b>Ingreso</b>, o corre
-      <code>select abrir_ciclo(hoy_lima());</code> en el SQL Editor.</p></div>`;
+    $("#cuerpo").innerHTML = `
+      <div class="tarjeta">
+        <h2>Sin ciclo abierto</h2>
+        <p class="vacio" style="margin-bottom:14px">
+          Nada se mide hasta que haya uno. Ábrelo con los ingresos que sabes que vienen.
+        </p>
+        <div class="botones" style="margin:0">
+          <button type="button" class="principal" data-acc="rotar">Empezar un ciclo</button>
+        </div>
+      </div>
+      <div class="tarjeta"><h2>Fijos y servicios</h2>${listaFijos(d)}</div>`;
     $("#h-ciclo").textContent = "";
     $("#h-estado").innerHTML = "";
+    $("#h-pie").textContent = "";
     return;
   }
 
@@ -558,6 +670,10 @@ function pintar(d) {
         Quedan <b>${soles(e.disponible)}</b> para ${e.dias_restantes} día${e.dias_restantes === 1 ? "" : "s"}.
         Vienes gastando ${soles(e.ritmo)} al día.
       </div>
+      ${d.atipico ? `<p class="sutil" style="margin:10px 0 0">
+        Este ciclo está marcado como <b>atípico</b>. Los números son reales, pero no
+        entran en promedios ni siembran las reglas del ciclo siguiente.
+      </p>` : ""}
 
       <div class="medidor">
         <div class="pista">
@@ -612,6 +728,9 @@ function pintar(d) {
     <div class="tarjeta">
       <h2>Al ahorro por ciclo</h2>
       <div class="lienzo" id="g-historial"></div>
+      <div class="botones" style="margin-top:16px">
+        <button type="button" data-acc="rotar">Cerrar este ciclo y empezar el siguiente</button>
+      </div>
     </div>`;
 
   graficoRitmo($("#g-ritmo"), e, d.por_dia ?? []);
@@ -623,29 +742,42 @@ function pintar(d) {
     `Actualizado ${hora(d.generado_en)} · los números salen de estado_ciclo() en Postgres.`;
 }
 
+// El nombre abre la edición; la pastilla registra el pago. Dos
+// acciones distintas en la misma fila, porque son los dos únicos
+// verbos que tiene un fijo.
 function listaFijos(d) {
-  const f = (d.fijos ?? []).map((x) => `
+  const fila = (clase, x, monto, etiqueta, pagado) => `
     <div class="fila-pend">
-      <span>${esc(x.nombre)} ${x.pagado ? "" : '<span class="sutil">· pendiente</span>'}</span>
-      <span class="der" ${x.pagado ? 'style="color:var(--tinta-3)"' : ""}>${soles(x.monto)}</span>
-    </div>`).join("");
-  const s = (d.servicios ?? []).map((x) => `
-    <div class="fila-pend">
-      <span>${esc(x.nombre)} <span class="sutil">· ${x.pagado ? "pagado" : "estimado"}</span></span>
-      <span class="der" ${x.pagado ? 'style="color:var(--tinta-3)"' : ""}>${soles(x.pagado ?? x.estimado)}</span>
-    </div>`).join("");
-  return (f + s) || '<p class="vacio">Sin fijos ni servicios activos.</p>';
+      <span class="tocable" data-acc="${clase}" data-id="${x.id}">${esc(x.nombre)}
+        <span class="sutil">· ${etiqueta}</span></span>
+      <span class="der" ${pagado ? 'style="color:var(--tinta-3)"' : ""}>${soles(monto)}${
+        pagado ? "" : `<button class="pastilla" data-acc="pago" data-clase="${clase}" data-id="${x.id}">Pagar</button>`
+      }</span>
+    </div>`;
+
+  const f = (d.fijos ?? []).map((x) =>
+    fila("fijo", x, x.monto, x.pagado ? "pagado" : "pendiente", x.pagado)).join("");
+
+  const s = (d.servicios ?? []).map((x) =>
+    fila("servicio", x, x.pagado ?? x.estimado,
+         x.pagado ? "pagado" : (x.vence_el ? `vence ${dia(x.vence_el)}` : "estimado"),
+         x.pagado != null)).join("");
+
+  return (f + s || '<p class="vacio">Sin fijos ni servicios activos.</p>') + `
+    <button class="agregar" data-acc="fijo">+ Fijo</button>
+    <button class="agregar" data-acc="servicio" style="margin-left:14px">+ Servicio</button>`;
 }
 
 function listaIngresos(xs) {
-  if (!xs?.length) return '<p class="vacio">Sin ingresos registrados en este ciclo.</p>';
+  const alta = '<button class="agregar" data-acc="ingreso">+ Registrar ingreso</button>';
+  if (!xs?.length) return '<p class="vacio">Sin ingresos registrados en este ciclo.</p>' + alta;
   return xs.map((x) => `
     <div class="fila-pend">
       <span>${esc(x.fuente)}
         <span class="sutil">· ${x.principal ? "sueldo" : x.es_retiro ? "de ahorros" : "extra"}${x.confirmado ? "" : " · sin confirmar"}</span>
       </span>
       <span class="der">${soles(x.monto)}</span>
-    </div>`).join("");
+    </div>`).join("") + alta;
 }
 
 function avisos(d) {
@@ -719,6 +851,405 @@ async function refrescar() {
   }
 }
 
+
+// ============================================================
+// Escrituras
+//
+// Cada acción es una función de Postgres detrás de POST /accion.
+// Acá no se calcula nada: se manda, y lo que vuelve se repinta
+// desde panel(). Así el panel nunca muestra un número que la base
+// no confirmó.
+// ============================================================
+async function accion(cuerpo) {
+  const r = await fetch(`${baseDe(leer("pace_url"))}/accion`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${leer("pace_token")}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(cuerpo),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || d.ok === false) throw new Error(d.error ?? `El servidor respondió ${r.status}`);
+  return d;
+}
+
+function aviso(texto, malo = false) {
+  const el = document.createElement("div");
+  el.className = "aviso" + (malo ? " malo" : "");
+  el.textContent = texto;
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add("visible"));
+  setTimeout(() => {
+    el.classList.remove("visible");
+    setTimeout(() => el.remove(), 250);
+  }, malo ? 4200 : 2600);
+}
+
+// Hoja inferior. Una sola a la vez; Escape y tocar fuera cierran.
+function hoja({ titulo, intro, cuerpo, accionTexto = "Guardar", peligro = false, alEnviar }) {
+  document.querySelector(".velo")?.remove();
+
+  const velo = document.createElement("div");
+  velo.className = "velo";
+  velo.innerHTML = `
+    <form class="hoja" novalidate>
+      <h3>${esc(titulo)}</h3>
+      ${intro ? `<p class="intro">${intro}</p>` : ""}
+      ${cuerpo}
+      <div class="botones">
+        <button type="button" data-cerrar>Cancelar</button>
+        <button type="submit" class="${peligro ? "peligro" : "principal"}">${esc(accionTexto)}</button>
+      </div>
+    </form>`;
+  document.body.appendChild(velo);
+  requestAnimationFrame(() => velo.classList.add("visible"));
+
+  const cerrar = () => {
+    velo.classList.remove("visible");
+    setTimeout(() => velo.remove(), 200);
+    document.removeEventListener("keydown", alTeclado);
+  };
+  const alTeclado = (ev) => { if (ev.key === "Escape") cerrar(); };
+  document.addEventListener("keydown", alTeclado);
+
+  velo.addEventListener("click", (ev) => { if (ev.target === velo) cerrar(); });
+  velo.querySelector("[data-cerrar]").onclick = cerrar;
+
+  const form = velo.querySelector("form");
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const enviar = form.querySelector('button[type="submit"]');
+    const antes = enviar.textContent;
+    enviar.disabled = true; enviar.textContent = "…";
+    try {
+      const r = await alEnviar(new FormData(form), form);
+      cerrar();
+      aviso(r?.mensaje ?? "Listo");
+      await refrescar();
+    } catch (err) {
+      enviar.disabled = false; enviar.textContent = antes;
+      aviso(err.message, true);
+    }
+  });
+
+  velo.querySelector("input, select")?.focus();
+  return { velo, form, cerrar };
+}
+
+const campo = (nombre, etiqueta, extra = "") =>
+  `<div class="campo"><label for="c-${nombre}">${esc(etiqueta)}</label>
+     <input id="c-${nombre}" name="${nombre}" ${extra}></div>`;
+
+const num = (v) => {
+  const n = Number(String(v ?? "").replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+};
+const vacioANulo = (v) => {
+  const t = String(v ?? "").trim();
+  return t === "" ? null : t;
+};
+
+// ------------------------------------------------------------
+// Reglas del ciclo
+//
+// El abanico de porcentajes se pide una vez a Postgres al abrir y
+// el deslizador solo indexa sobre él. El número que ves al mover
+// el dedo salió de simular_ciclo(), no de una fórmula repetida
+// acá — si la regla cambia en la base, el panel no se queda atrás.
+// ------------------------------------------------------------
+async function hojaReglas(d) {
+  const c = d.config ?? {};
+  let pasos = [];
+  try { pasos = await accion({ accion: "simular" }); } catch { /* sigue sin vista previa */ }
+
+  const idx = () => {
+    let mejor = 0, dist = Infinity;
+    pasos.forEach((p, i) => {
+      const dd = Math.abs(Number(p.pct_ahorro) - Number(c.pct_ahorro));
+      if (dd < dist) { dist = dd; mejor = i; }
+    });
+    return mejor;
+  };
+
+  const { form } = hoja({
+    titulo: "Reglas del ciclo",
+    intro: "Se congelan por periodo. Cambiarlas a mitad de camino recalcula al momento y deja rastro.",
+    cuerpo: `
+      ${pasos.length ? `
+        <div class="campo">
+          <label for="c-pct">Ahorro del ciclo</label>
+          <input id="c-pct" name="pct" type="range" min="0" max="${pasos.length - 1}"
+                 step="1" value="${idx()}">
+        </div>
+        <div class="vista-previa" id="vp"></div>
+      ` : campo("pct_libre", "% de ahorro", `type="number" min="0" max="100" step="1" value="${c.pct_ahorro ?? 20}"`)}
+
+      <div class="par">
+        ${campo("esposa", "Monto a la esposa", `type="number" inputmode="decimal" step="0.01" value="${c.monto_esposa ?? 0}"`)}
+        ${campo("dia_eval", "Evaluar desde el día", `type="number" min="1" max="99" value="${c.dia_inicio_eval ?? 5}"`)}
+      </div>
+      <div class="campo">
+        <label for="c-alertas">Alertas</label>
+        <select id="c-alertas" name="alertas">
+          <option value="si" ${c.alertas_activas ? "selected" : ""}>Encendidas</option>
+          <option value="no" ${c.alertas_activas ? "" : "selected"}>Apagadas — solo medir</option>
+        </select>
+        <p class="pista-ayuda">Apágalas en un ciclo que no sirve de referencia: un aviso sin sentido enseña a ignorar los que sí.</p>
+      </div>
+      ${campo("nota", "Nota del cambio (opcional)", `type="text" placeholder="por qué lo moviste"`)}`,
+
+    alEnviar: async (fd) => {
+      const pct = pasos.length
+        ? Number(pasos[Number(fd.get("pct"))].pct_ahorro)
+        : num(fd.get("pct_libre"));
+      return accion({
+        accion: "config",
+        pct_ahorro: pct,
+        monto_esposa: num(fd.get("esposa")),
+        dia_inicio_eval: num(fd.get("dia_eval")),
+        alertas_activas: fd.get("alertas") === "si",
+        nota: vacioANulo(fd.get("nota")),
+      });
+    },
+  });
+
+  if (!pasos.length) return;
+  const rango = form.querySelector("#c-pct");
+  const vp = form.querySelector("#vp");
+  const pintarVp = () => {
+    const p = pasos[Number(rango.value)];
+    vp.innerHTML = `
+      <div class="grande">${soles(p.por_dia)} <span style="font-size:14px;font-weight:400;color:var(--tinta-2)">al día</span></div>
+      <div class="detalle">
+        ${nf0(p.pct_ahorro)}% al ahorro · ${soles(p.ahorro)} al mes<br>
+        Bolsa ${soles(p.bolsa)} · ${soles(p.por_semana)} a la semana
+      </div>`;
+  };
+  rango.addEventListener("input", pintarVp);
+  pintarVp();
+}
+
+// ------------------------------------------------------------
+// Empezar un ciclo
+//
+// El ritual del día 1 va en una sola llamada: cerrar, abrir,
+// registrar los ingresos que ya sabes que vienen y fijar las
+// reglas. A medio camino el estado es incoherente —un ciclo
+// abierto sin ingresos tiene la bolsa en negativo y sale rojo—,
+// así que o entra todo o no entra nada.
+// ------------------------------------------------------------
+function hojaRotar(d) {
+  const e = d.estado;
+  const fecha = (iso) => { const [y, m, dd] = String(iso).split("-").map(Number); return new Date(y, m - 1, dd); };
+  const iso = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  const mes = (x) =>
+    mayus(x.toLocaleDateString("es-PE", { month: "long" })) + " " + x.getFullYear();
+
+  // El ciclo nuevo empieza donde termina el actual, no el 1 del mes
+  // que viene: si este va del 1 al 31 de octubre, el siguiente
+  // arranca el 1 de noviembre aunque hoy sea 20 de setiembre.
+  const prox = e?.fin
+    ? new Date(fecha(e.fin).getTime() + 86400000)
+    : fecha(d.hoy);
+
+  // Los sueldos se repiten, los extras no. Se precargan solo los
+  // que se declararon al abrir el ciclo anterior ('esperado') o el
+  // principal — un freelance de una vez no tiene por qué reaparecer.
+  const previos = (d.ingresos ?? []).filter((i) =>
+    !i.es_retiro && (i.principal || String(i.nota ?? "").startsWith("esperado")));
+
+  const filas = [...(previos.length ? previos : [{ fuente: "", monto: "" }]), { fuente: "", monto: "" }]
+    .map((i, n) => `
+      <div class="par">
+        ${campo(`fuente${n}`, n === 0 ? "Fuente principal" : "Otra fuente", `type="text" value="${esc(i.fuente ?? "")}" placeholder="${n === 0 ? "Oficina" : "opcional"}"`)}
+        ${campo(`monto${n}`, "Monto", `type="number" inputmode="decimal" step="0.01" value="${i.monto ?? ""}"`)}
+      </div>`).join("");
+
+  hoja({
+    titulo: "Empezar un ciclo",
+    intro: e
+      ? `Se cerrará <b>${esc(e.etiqueta ?? "el ciclo actual")}</b> barriendo
+         <b>${soles(Math.max(Number(e.disponible), 0))}</b> al ahorro, y se abrirá el siguiente.
+         Esto no se deshace.`
+      : "No hay ciclo abierto. Se abrirá uno nuevo.",
+    accionTexto: "Cerrar y abrir",
+    peligro: !!e,
+    cuerpo: `
+      <div class="par">
+        ${campo("inicio", "Empieza el", `type="date" value="${iso(prox)}"`)}
+        ${campo("etiqueta", "Nombre", `type="text" value="${esc(mes(prox).replace(/^./, (m) => m.toUpperCase()))}"`)}
+      </div>
+      <p class="intro" style="margin:2px 0 10px">
+        Ingresos que ya sabes que vienen. Se registran por adelantado: la bolsa mide
+        margen, no saldo. No los vuelvas a mandar con el Atajo cuando caigan.
+      </p>
+      ${filas}
+      ${campo("pct", "% de ahorro del ciclo nuevo", `type="number" min="0" max="100" step="1" value="${d.config?.pct_ahorro ?? 20}"`)}`,
+
+    alEnviar: async (fd, form) => {
+      const ingresos = [];
+      form.querySelectorAll('[name^="fuente"]').forEach((el, n) => {
+        const fuente = vacioANulo(el.value);
+        const monto = num(form.querySelector(`[name="monto${n}"]`)?.value);
+        if (fuente && monto) ingresos.push({ fuente, monto, principal: n === 0, nota: "esperado" });
+      });
+      if (!ingresos.length) throw new Error("Registra al menos un ingreso");
+
+      return accion({
+        accion: "rotar",
+        confirmar: true,
+        inicio: fd.get("inicio"),
+        etiqueta: vacioANulo(fd.get("etiqueta")),
+        ingresos,
+        config: {
+          pct_ahorro: num(fd.get("pct")),
+          monto_esposa: d.config?.monto_esposa ?? null,
+          dia_inicio_eval: d.config?.dia_inicio_eval ?? null,
+          alertas_activas: true,
+        },
+      });
+    },
+  });
+}
+
+// ------------------------------------------------------------
+// Ingresos sueltos
+// ------------------------------------------------------------
+function hojaIngreso() {
+  hoja({
+    titulo: "Registrar ingreso",
+    intro: "Para lo que no estaba previsto. El sueldo del ciclo ya se registró al abrirlo.",
+    cuerpo: `
+      ${campo("monto", "Monto", `type="number" inputmode="decimal" step="0.01" autofocus`)}
+      ${campo("fuente", "Fuente", `type="text" placeholder="Bono, venta, devolución…"`)}
+      <div class="campo">
+        <label for="c-clase">Tipo</label>
+        <select id="c-clase" name="clase">
+          <option value="extra">Ingreso extra</option>
+          <option value="retiro">Saqué de ahorros</option>
+          <option value="sueldo">Sueldo (marca principal, no rota)</option>
+        </select>
+        <p class="pista-ayuda">Un retiro suma a la caja pero no al ahorro: si contara, el motor ahorraría el 30% de plata que acabas de sacar del ahorro.</p>
+      </div>`,
+    alEnviar: (fd) => {
+      const monto = num(fd.get("monto"));
+      if (!monto || monto <= 0) throw new Error("Falta un monto válido");
+      return accion({
+        accion: "ingreso",
+        monto,
+        fuente: vacioANulo(fd.get("fuente")) ?? "Otro",
+        clase: fd.get("clase"),
+      });
+    },
+  });
+}
+
+// ------------------------------------------------------------
+// Pagar un fijo o un servicio
+//
+// Va enlazado, no como gasto suelto: si entrara por el Atajo
+// "Gasto" se comería la bolsa dos veces — una como estimado
+// descontado el día 1, y otra como movimiento.
+// ------------------------------------------------------------
+function hojaPago(clase, item) {
+  const sugerido = clase === "fijo" ? item.monto : (item.pagado ?? item.estimado);
+  hoja({
+    titulo: `Pagar ${item.nombre}`,
+    intro: "Entra enlazado, así que no toca la bolsa: ya estaba descontado desde el día 1.",
+    accionTexto: "Registrar pago",
+    cuerpo: `
+      ${campo("monto", "Monto real del recibo", `type="number" inputmode="decimal" step="0.01" value="${sugerido ?? ""}" autofocus`)}
+      <div class="campo">
+        <label for="c-metodo">Con qué pagaste</label>
+        <select id="c-metodo" name="metodo">
+          <option value="bcp_debito">BCP débito</option>
+          <option value="interbank_debito">Interbank débito</option>
+          <option value="bcp_credito">BCP crédito</option>
+          <option value="interbank_credito">Interbank crédito</option>
+          <option value="efectivo">Efectivo</option>
+        </select>
+      </div>
+      ${clase === "servicio"
+        ? `<p class="pista-ayuda">El vencimiento se adelanta un mes y el estimado pasa a seguir tus últimos tres pagos.</p>`
+        : ""}`,
+    alEnviar: (fd) => {
+      const monto = num(fd.get("monto"));
+      if (!monto || monto <= 0) throw new Error("Falta un monto válido");
+      return accion({ accion: "pago", clase, id: item.id, monto, metodo: fd.get("metodo") });
+    },
+  });
+}
+
+// ------------------------------------------------------------
+// Alta y edición de fijos y servicios
+//
+// No se borran, se desactivan: un movimiento viejo enlazado a un
+// servicio borrado perdería el enlace y volvería a contar como
+// gasto variable de un ciclo ya cerrado.
+// ------------------------------------------------------------
+function hojaFijo(item) {
+  const nuevo = !item;
+  hoja({
+    titulo: nuevo ? "Nuevo fijo" : `Editar ${item.nombre}`,
+    intro: "Monto que no cambia de mes a mes. Sale de la bolsa desde el día 1.",
+    cuerpo: `
+      ${campo("nombre", "Nombre", `type="text" value="${esc(item?.nombre ?? "")}" placeholder="Alquiler"`)}
+      <div class="par">
+        ${campo("monto", "Monto", `type="number" inputmode="decimal" step="0.01" value="${item?.monto ?? ""}"`)}
+        ${campo("dia", "Día aproximado", `type="number" min="1" max="31" value="${item?.dia_aprox ?? ""}"`)}
+      </div>
+      ${nuevo ? "" : `
+        <div class="campo">
+          <label for="c-activo">Estado</label>
+          <select id="c-activo" name="activo">
+            <option value="si" selected>Activo</option>
+            <option value="no">Desactivar — sale de la bolsa el ciclo siguiente</option>
+          </select>
+        </div>`}`,
+    alEnviar: (fd) => accion({
+      accion: "fijo",
+      id: item?.id ?? null,
+      nombre: vacioANulo(fd.get("nombre")),
+      monto: num(fd.get("monto")),
+      dia_aprox: num(fd.get("dia")),
+      activo: nuevo ? true : fd.get("activo") === "si",
+    }),
+  });
+}
+
+function hojaServicio(item) {
+  const nuevo = !item;
+  hoja({
+    titulo: nuevo ? "Nuevo servicio" : `Editar ${item.nombre}`,
+    intro: "Monto que varía o que llega como recibo con vencimiento. Con fecha de vencimiento avisa si se te pasa.",
+    cuerpo: `
+      ${campo("nombre", "Nombre", `type="text" value="${esc(item?.nombre ?? "")}" placeholder="Luz"`)}
+      <div class="par">
+        ${campo("estimado", "Estimado", `type="number" inputmode="decimal" step="0.01" value="${item?.estimado ?? ""}"`)}
+        ${campo("dia", "Día aproximado", `type="number" min="1" max="31" value="${item?.dia_aprox ?? ""}"`)}
+      </div>
+      ${campo("vence", "Vence el", `type="date" value="${item?.vence_el ?? ""}"`)}
+      ${nuevo ? "" : `
+        <div class="campo">
+          <label for="c-activo">Estado</label>
+          <select id="c-activo" name="activo">
+            <option value="si" selected>Activo</option>
+            <option value="no">Desactivar — sale de la bolsa el ciclo siguiente</option>
+          </select>
+        </div>`}`,
+    alEnviar: (fd) => accion({
+      accion: "servicio",
+      id: item?.id ?? null,
+      nombre: vacioANulo(fd.get("nombre")),
+      estimado: num(fd.get("estimado")),
+      dia_aprox: num(fd.get("dia")),
+      vence_el: vacioANulo(fd.get("vence")),
+      activo: nuevo ? true : fd.get("activo") === "si",
+    }),
+  });
+}
+
 // ============================================================
 // Arranque
 // ============================================================
@@ -733,6 +1264,35 @@ const temaGuardado = leer("pace_tema");
 if (temaGuardado) document.documentElement.setAttribute("data-theme", temaGuardado);
 
 $("#b-refrescar").onclick = refrescar;
+
+// El cuerpo se repinta entero en cada refresco, así que los
+// manejadores van por delegación: uno solo, en el documento, que
+// sobrevive a los innerHTML.
+document.addEventListener("click", (ev) => {
+  const el = ev.target.closest("[data-acc]");
+  if (!el || el.closest(".hoja")) return;
+  ev.preventDefault();
+
+  const d = ultimo ?? {};
+  const id = el.dataset.id;
+  const buscar = (lista) => (d[lista] ?? []).find((x) => x.id === id);
+
+  switch (el.dataset.acc) {
+    case "reglas":
+      if (!d.estado) return aviso("No hay ciclo abierto", true);
+      return hojaReglas(d);
+    case "rotar":    return hojaRotar(d);
+    case "ingreso":  return hojaIngreso();
+    case "fijo":     return hojaFijo(id ? buscar("fijos") : null);
+    case "servicio": return hojaServicio(id ? buscar("servicios") : null);
+    case "pago": {
+      const clase = el.dataset.clase;
+      const item = buscar(clase === "fijo" ? "fijos" : "servicios");
+      return item ? hojaPago(clase, item) : aviso("No encontré ese registro", true);
+    }
+  }
+});
+
 
 $("#f-entrar").onclick = async () => {
   const url = $("#f-url").value.trim(), token = $("#f-token").value.trim();

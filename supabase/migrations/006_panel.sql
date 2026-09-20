@@ -131,7 +131,11 @@ begin
   v_hoy  := hoy_lima();
   v_dias := (p.fin - p.inicio) + 1;
   v_dia  := greatest(least((v_hoy - p.inicio) + 1, v_dias), 1);
-  v_rest := greatest((p.fin - v_hoy) + 1, 1);
+  -- Un ciclo abierto por adelantado (rotar el 29 para que empiece
+  -- el 1) tenía más días restantes que días de ciclo, y el
+  -- permitido diario salía repartido entre los días que faltan
+  -- para empezar. Nunca puede quedar más de lo que dura.
+  v_rest := greatest(least((p.fin - v_hoy) + 1, v_dias), 1);
 
   select coalesce(sum(monto) filter (where not es_retiro), 0),
          coalesce(sum(monto) filter (where es_retiro), 0)
