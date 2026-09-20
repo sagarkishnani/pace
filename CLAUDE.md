@@ -13,16 +13,22 @@ supabase/
   migrations/003_matching.sql  normalización, enlace de servicios, triggers
   migrations/004_comercios.sql catálogo de comercios (datos, no lógica)
   migrations/005_worker.sql    ajustes que salieron de los correos reales
-  functions/gasto/index.ts     POST /gasto — endpoint del Atajo de iOS
-  functions/correo/index.ts    POST /correo — webhook del correo entrante
+  migrations/006_panel.sql     débito/crédito, hoy_lima, panel(), alertas, ingresos
+  functions/gasto/index.ts     POST /gasto    — Atajo "Gasto"
+  functions/ingreso/index.ts   POST /ingreso  — Atajo "Ingreso"
+  functions/resumen/index.ts   GET  /resumen  — lo que lee el panel
+  functions/alerta/index.ts    POST /alerta   — lo que dispara el cron
+  functions/correo/index.ts    POST /correo   — webhook del correo entrante
+  functions/_shared/vocabulario.ts  métodos, categorías, clases de ingreso
+  functions/_shared/notificar.ts    formato del webhook de alertas
+  functions/_shared/http.ts         CORS, token, waitUntil
   functions/_shared/texto.ts   normalización y extracción de campos
   functions/_shared/parsers.ts los cuatro parsers
   functions/_shared/webhook.ts lectura del payload del proveedor
+web/index.html                 el panel: un archivo, sin dependencias ni build
 test/
   correos.ts                   los cuatro correos reales, literales
 ```
-
-No es un repo git. El README que se mencionó en el diseño nunca llegó al disco.
 
 ## Reglas de negocio que el código asume
 
@@ -41,6 +47,21 @@ global. Editarla a mitad de camino recalcula al momento y deja rastro (`editado_
 alquiler entrara como gasto normal, el día 1 la proyección se dispararía a rojo. La bolsa
 es *solo* gasto variable. `fijos_pendientes` en `estado_ciclo()` es informativo.
 
+**El crédito cuenta al pasar la tarjeta, no al pagar el estado de cuenta.** El motor mide
+margen para ahorrar, y un consumo a crédito ya se comió ese margen aunque la plata siga en
+la cuenta. Contarlo al pagar dejaría el ciclo en verde mientras la tarjeta se llena.
+`estado_ciclo()` separa `gastado_credito` de `gastado_contado` para que se vea cuánto de
+la cuenta sigue comprometido, pero los dos van dentro de `gastado`.
+
+**`pago_tarjeta` se excluye del gasto.** Es el corolario de lo anterior: si el pago del
+estado de cuenta contara, los mismos soles saldrían dos veces de la bolsa. Mismo criterio
+que `consumo_monedero`. Se registra igual, para que la reconciliación cuadre contra el
+extracto.
+
+**El día lo decide Lima, no UTC.** `hoy_lima()`, no `current_date`. En un servidor UTC el
+día cambia a las 7 de la noche de Lima: un gasto de la cena caía en el día siguiente y el
+contador de días del ciclo se adelantaba toda la tarde — justo el número que más se mira.
+
 **Retirar de ahorros no es ingreso.** `ingresos.es_retiro = true` suma a la caja
 disponible pero no entra al cálculo del ahorro — si no, el motor "ahorraría" el 30% de
 plata que acabas de sacar del ahorro.
@@ -50,9 +71,12 @@ plata que acabas de sacar del ahorro.
 **Los documentos nunca crean un movimiento.** `documentos` (boletas, recibos) se enlazan
 a un movimiento existente o quedan en `pendiente` / `revisar`.
 
-**Las categorías tienen un vocabulario canónico y vive en el endpoint.** La lista está
-en `CATEGORIAS` dentro de `functions/gasto/index.ts`: `comida`, `restaurante`,
-`transporte`, `salud`, `hogar`, `personal`, `otro`. No hay tabla catálogo ni check
+**Las categorías tienen un vocabulario canónico y vive en `_shared/vocabulario.ts`.** La
+lista está en `CATEGORIAS`: `comida`, `restaurante`, `transporte`, `salud`, `hogar`,
+`personal`, `otro`. Siete, y así se quedan — se revisó agregar más y la respuesta fue que
+el menú del Atajo es el cuello de botella, no el vocabulario. Vive en `_shared` y no
+dentro del handler por lo mismo que `webhook.ts`: dentro del handler no se puede probar,
+porque el handler importa Deno y supabase-js. No hay tabla catálogo ni check
 constraint a propósito — el menú del Atajo está hardcodeado en iOS y no se sincroniza con
 la base, así que una tabla daría fricción sin ganar nada, y un constraint haría frágiles
 a los parsers de la fase 2. El endpoint es el único guardián. Los parsers de correo tienen
@@ -61,8 +85,15 @@ sale partido en dos vocabularios.
 
 Una categoría desconocida **no rechaza el movimiento**: entra con `categoria` nula y el
 valor crudo queda en `raw.categoria_cruda`. Mismo criterio que `metodo`, que cae a
-`interbank`. El Atajo corre parado en una caja; perder el gasto es peor que perder el
-metadato.
+`interbank_credito` y deja `raw.metodo_crudo`. El Atajo corre parado en una caja; perder
+el gasto es peor que perder el metadato. El monto es lo único que sí rechaza el registro:
+es lo único que no se puede reconstruir después.
+
+**El menú del Atajo y `METODOS` no son la misma lista.** El endpoint acepta más claves de
+las que el menú muestra (`yape`, `plin`, `pago_bcp`, `recarga_monedero`…) porque cambiar
+el menú es un trámite manual en el iPhone y mientras tanto lo viejo tiene que seguir
+entrando. `bcp` e `interbank` sin sufijo —lo que mandaba el Atajo antes de separar débito
+de crédito— siguen entrando como crédito.
 
 **Deduplicación por referencia del banco, no por hash.** `unique (banco, ref_operacion)`
 es la llave principal; `hash_origen` es solo respaldo para fuentes que no traen
@@ -110,7 +141,66 @@ equivocado es más caro que uno faltante: el faltante se ve, el equivocado no.
 **`recibos_pendientes()` es lo único que avisa por algo que no pasó** — un servicio cuyo
 `vence_el` ya pasó y no tiene movimiento en el ciclo.
 
+## El panel y las alertas (migración 006)
+
+**`panel()` devuelve todo en un jsonb y una sola llamada.** El panel se abre desde el
+celular con señal de calle; ocho viajes son medio segundo cada uno y un estado a medio
+cargar. Además mantiene la regla de la casa: los números salen de `estado_ciclo()` y nadie
+los recalcula en el cliente. Si el panel empezara a sumar por su cuenta habría dos
+verdades, y la del celular sería la que se mira.
+
+**El panel lee por `/resumen`, no por PostgREST.** RLS está activo sin políticas públicas:
+la `anon key` no lee nada. La alternativa sería meter la `service_role key` en el
+navegador, que es exactamente lo que no se hace nunca. `/resumen` usa `PANEL_TOKEN`, un
+token propio —el navegador del celular está más expuesto que el Atajo y rotarlo no obliga
+a reconfigurar el iPhone.
+
+**El panel es de solo lectura.** Las correcciones siguen yendo por el SQL Editor en la
+reconciliación semanal. Agregar escrituras significa otro endpoint y más superficie; la
+decisión fue esperar a que la falta se sienta.
+
+**`web/index.html` no tiene dependencias ni build.** Los gráficos son SVG escrito a mano.
+Una librería de charts pesa más que todo el archivo y hay que mantenerla al día.
+
+**`evaluar_alerta()` decide, el endpoint solo hace el POST.** Por lo mismo que los
+números: una sola fuente. Avisa cuando el estado **sube**, cuando sigue en rojo y pasó un
+día, y cuando sale de rojo. No avisa al bajar de ámbar a verde — eso es el sistema
+funcionando, y una notificación que no pide nada enseña a ignorar las que sí.
+
+**El aviso de escalada sale desde `/gasto`, no desde el cron.** El momento en que sirve es
+cuando el gasto que acabas de registrar es el que cambió el estado: sigues parado en la
+caja. Va con `EdgeRuntime.waitUntil` para no gastarle al gesto su presupuesto de cinco
+segundos.
+
+**El formato del webhook se deduce del dominio** (`ntfy.sh`, Telegram, Pushcut, Discord,
+JSON genérico). Un solo secret en vez de dos evita el estado imposible de tener la URL de
+un proveedor y el formato de otro.
+
+**`alertas_activas` apaga las alertas sin tocar el motor.** Reemplaza el truco de
+`dia_inicio_eval = 99`, que sigue funcionando igual.
+
+## Ingresos (`registrar_ingreso`)
+
+**`sueldo` rota el ciclo; `extra` y `retiro` no.** Cerrar el ciclo barre el sobrante al
+ahorro y no se deshace con un toque, así que hay una guarda: un `sueldo` con el ciclo de
+menos de 20 días **registra el ingreso pero no rota**, y devuelve el motivo en texto.
+Cubre el caso normal de cobrar en dos partes (Oficina y TWNSTUDIOS el mismo día) y el de
+un mal toque. `p_forzar` la salta.
+
+**Perder el ingreso sería peor que no rotar.** Es el número del que cuelga todo lo demás:
+un ingreso que no suma deja la bolsa en negativo y el ciclo en rojo sin que nada parezca
+roto. Por eso el ingreso entra siempre, rote o no.
+
+**El orden importa:** cerrar el ciclo viejo → abrir el nuevo → insertar el ingreso. Al
+revés, `tg_asignar_ciclo_ingreso` lo mete en el ciclo que está por cerrarse e infla su
+sobrante.
+
 ## La entrada de correo
+
+> **No está enchufada.** Está construida y probada contra los cuatro correos reales, pero
+> el dueño decidió quedarse en registro manual: un parser que lee mal un correo falla en
+> silencio, y eso cuesta más que un gasto que nadie registró. Nada de acá se borró — se
+> enciende el día que el Atajo pese demasiado. Todo lo de abajo sigue siendo cierto.
 
 Un proveedor de correo entrante (Postmark, CloudMailin, Mailgun) recibe el correo del
 banco y hace POST a `/correo` con el cuerpo ya parseado. La función lo convierte en
@@ -167,71 +257,116 @@ npm test
 ```
 
 No necesita `npm install` ni dependencias: corren con el soporte nativo de TypeScript de
-Node 22 sobre los módulos de `_shared`. Las fixtures son los cuatro correos reales, tal
-cual llegan — su valor está en que son literales, así que no los edites al refactorizar.
+Node 22 sobre los módulos de `_shared`. Las fixtures de correo son los cuatro correos
+reales, tal cual llegan — su valor está en que son literales, así que no los edites al
+refactorizar.
 
-Lo que no se puede probar así es `functions/correo/index.ts`, que importa Deno y
-supabase-js. Por eso la lectura del payload vive en `_shared/webhook.ts` y no dentro del
-handler: ahí sí se prueba.
+Lo que no se puede probar así es cualquier `index.ts`, porque importan Deno y
+supabase-js. Ese es el criterio para decidir qué va a `_shared`: la lectura del payload
+(`webhook.ts`), el vocabulario de métodos y categorías (`vocabulario.ts`) y el formato de
+las notificaciones (`notificar.ts`) están afuera del handler precisamente para poder
+probarlos.
+
+El SQL no tiene suite. Se valida levantando un Postgres local, corriendo las seis
+migraciones en orden y sembrando un ciclo de ejemplo — así se encontraron el desborde del
+eje y el `current_date` en UTC.
 
 ## Captura de gastos por fuente
 
-| Fuente            | Cómo entra                                  |
-|-------------------|---------------------------------------------|
-| BCP tarjeta       | correo — trae 4 dígitos, comercio, operación |
-| Yape servicios    | correo — trae empresa y código de usuario    |
-| Yape P2P, Plin    | correo — Plin trae código de operación       |
-| Recibos comercio  | correo                                       |
-| **Interbank**     | **manual, vía Atajo de iOS** — no hay canal de correo |
-| Efectivo          | Atajo de iOS                                 |
+Todo entra por el **Atajo de iOS**. La entrada de correo está construida y probada contra
+los cuatro correos reales, pero **no está enchufada** y la decisión de dejarla así es del
+dueño: el reconocimiento por plantilla de banco falla en silencio, y un gasto que el
+parser leyó mal cuesta más que uno que nadie registró. Nada de lo del correo se borró;
+se enciende el día que el registro manual pese demasiado.
 
-Interbank es el único agujero y es el punto débil del sistema: todo lo que no capture el
-Atajo hay que atraparlo en la reconciliación semanal. Por eso el match de servicios va por
-`codigo_usuario`, no por monto.
+El menú del Atajo:
+
+| Opción             | metodo              | Queda como          |
+|--------------------|---------------------|---------------------|
+| BCP crédito        | `bcp_credito`       | BCP · credito       |
+| Interbank crédito  | `interbank_credito` | Interbank · credito |
+| BCP débito         | `bcp_debito`        | BCP · debito        |
+| Interbank débito   | `interbank_debito`  | Interbank · debito  |
+| Efectivo           | `efectivo`          | Efectivo · efectivo |
+
+**Yape y Plin no están en el menú a propósito.** Yape sale de la cuenta BCP y Plin de la
+Interbank, así que registrarlos como el débito que son deja los números iguales y el menú
+más corto. El endpoint los acepta igual: los parsers de correo emiten esos tipos y el
+trigger aprende destinatarios solo para `yape` y `plin`.
+
+Con todo en manual, el punto débil ya no es Interbank sino el hábito: lo que no capture el
+Atajo hay que atraparlo en la reconciliación semanal.
 
 ## Fases
 
 1. **Hecho** — Atajo de iOS + `/gasto`.
-2. **Hecho** — motor de matching en la base y los cuatro parsers tras `/correo`.
-3. Resumen diario y frontend.
-
-Pendiente antes de dar la fase 2 por cerrada: contratar el proveedor, apuntar el webhook y
-confirmar contra correos que lleguen de verdad.
+2. **Hecho, sin enchufar** — motor de matching en la base y los cuatro parsers tras
+   `/correo`. Falta contratar el proveedor y apuntar el webhook, y por ahora no se va a
+   hacer: se prefiere el registro manual (ver arriba).
+3. **Hecho** — débito vs crédito, Atajo de ingresos, panel (`web/index.html`) y alertas
+   por webhook.
 
 Estado del ciclo actual: setiembre es mes de déficit deliberado (`pct_ahorro = 0`, alertas
 apagadas, solo medición). Desde octubre el ingreso pasa a 7100 (2100 TWNSTUDIOS + 5000
 oficina), alquiler 2320 fijo, 500 a la esposa, servicios ~400 estimados. Noviembre es el
 primer ciclo con el sistema al 100% y con dos ciclos de datos reales detrás.
 
-## El Atajo de iOS
+## Los Atajos de iOS
 
-Se llama `Gasto`. Acciones: Pedir Número ("¿Cuánto?") → Elegir entre un menú
-(`interbank` / `efectivo` / `bcp`, en ese orden) → Elegir entre un menú (categoría) →
-Obtener contenido de URL (POST) → Vibrar. **"Mostrar al ejecutar" desactivado** en la
-acción de red, si no iOS abre la app entera y el gesto se siente lento.
+**`Gasto`.** Pedir Número ("¿Cuánto?") → menú de método (5 opciones) → menú de categoría
+(7) → Obtener contenido de URL (POST a `/gasto`) → Vibrar. **"Mostrar al ejecutar"
+desactivado** en la acción de red y en Vibrar: si no, iOS abre la app entera y el gesto se
+siente lento.
 
 El menú de categoría es el tercer toque y es el que más riesgo tiene de romper el hábito.
 Si el gesto empieza a pasar de cinco segundos, la salida es recortar la lista o sacar el
 paso y categorizar en la reconciliación semanal — no aguantarse la fricción. El monto es
-lo único que no se puede posponer.
+lo único que no se puede posponer. **Cinco métodos, no siete**: es la razón por la que
+Yape y Plin no están en el menú.
+
+**`Ingreso`.** Pedir Número ("¿Cuánto entró?") → menú de clase (`sueldo` / `extra` /
+`retiro`) → menú de fuente (`Oficina` / `TWNSTUDIOS` / `Otro`) → POST a `/ingreso` →
+Notificación con el campo `resumen`.
+
+Acá sí conviene **dejar "Mostrar al ejecutar" activado**, o mostrar el `resumen`: un
+ingreso pasa dos veces al mes y vale confirmar si rotó el ciclo. El gasto es lo que tiene
+que ser invisible; esto no.
 
 Acceso: botón de la pantalla de bloqueo (reemplaza la cámara) y Centro de Control como
 respaldo. El objetivo es que el gesto completo dure menos de cinco segundos; si pasa de
 ahí, hay que recortar el input, no aguantarse.
 
-Auth: header `Authorization: Bearer <SHORTCUT_TOKEN>`, comparado contra el secret del
-mismo nombre en Supabase. El token nunca va al repo.
+Auth: header `Authorization: Bearer <SHORTCUT_TOKEN>` en los dos, comparado contra el
+secret del mismo nombre en Supabase con comparación de largo constante. El token nunca va
+al repo.
 
 ## Comandos
 
 ```bash
-supabase functions deploy gasto
-supabase secrets set SHORTCUT_TOKEN=...
 supabase db push
+npm test                        # vocabulario, notificaciones y parsers
 
-npm test                        # parsers contra los correos reales
-supabase functions deploy correo
-supabase secrets set CORREO_TOKEN=...
+supabase secrets set SHORTCUT_TOKEN=...   # los dos Atajos
+supabase secrets set PANEL_TOKEN=...      # el panel y el cron de alertas
+supabase secrets set ALERTA_WEBHOOK_URL=https://ntfy.sh/pace-...
+supabase secrets set CORREO_TOKEN=...     # solo si se enchufa el correo
+
+supabase functions deploy gasto
+supabase functions deploy ingreso
+supabase functions deploy resumen
+supabase functions deploy alerta
+```
+
+Las cuatro van con `verify_jwt = false` en `config.toml`: ninguna habla con un cliente de
+Supabase, así que ninguna trae un JWT de Supabase en el `Authorization`. Con
+`verify_jwt = true` el gateway las rechaza con 401 antes de que corran, y el error no dice
+por qué.
+
+Probar un mensaje de alerta sin gastarse una notificación:
+
+```bash
+curl -H "Authorization: Bearer $PANEL_TOKEN" \
+  "https://<ref>.supabase.co/functions/v1/alerta?modo=diario&dry=1"
 ```
 
 **`supabase link` falla** en este proyecto con `"Your account does not have the necessary

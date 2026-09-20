@@ -370,8 +370,27 @@ authorization_url_path = "/oauth/consent"
 # Allow dynamic client registration
 allow_dynamic_registration = false
 
-# El webhook del proveedor de correo entrante no manda JWT de
-# Supabase: se autentica con CORREO_TOKEN (Bearer o Basic).
+# Ninguno de estos endpoints habla con un cliente de Supabase, así
+# que ninguno trae un JWT de Supabase en el Authorization: el Atajo
+# de iOS manda SHORTCUT_TOKEN, el panel PANEL_TOKEN y el proveedor
+# de correo CORREO_TOKEN. Con verify_jwt = true el gateway los
+# rechaza con 401 antes de que la función llegue a correr, y el
+# error no dice por qué.
+#
+# Cada función valida su token en el primer bloque del handler, con
+# comparación de largo constante.
+[functions.gasto]
+verify_jwt = false
+
+[functions.ingreso]
+verify_jwt = false
+
+[functions.resumen]
+verify_jwt = false
+
+[functions.alerta]
+verify_jwt = false
+
 [functions.correo]
 verify_jwt = false
 

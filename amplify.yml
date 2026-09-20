@@ -1,0 +1,18 @@
+# Amplify Hosting — solo el panel.
+#
+# No hay build: web/index.html es un archivo estático sin
+# dependencias. Amplify publica esa carpeta tal cual y ya.
+#
+# El resto del repo (supabase/) no se despliega acá: las Edge
+# Functions van por `supabase functions deploy`.
+version: 1
+frontend:
+  phases:
+    build:
+      commands: []
+  artifacts:
+    baseDirectory: web
+    files:
+      - '**/*'
+  cache:
+    paths: []

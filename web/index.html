@@ -1,0 +1,769 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="pace">
+<title>pace</title>
+
+<!--
+  Panel de pace.
+
+  Un archivo, sin dependencias ni build, igual que el resto del
+  proyecto. Los gráficos son SVG escrito a mano: una librería de
+  charts pesa más que todo esto y hay que actualizarla.
+
+  No calcula nada. Cada número que se ve acá salió de
+  estado_ciclo() en Postgres. Si el panel empezara a sumar por su
+  cuenta habría dos verdades, y la del celular sería la que se
+  mira.
+
+  Lee de GET /resumen con un token. No le pega a PostgREST porque
+  RLS está activo sin políticas públicas: la anon key no lee nada,
+  y la service_role key no se pone en un navegador jamás.
+-->
+
+<style>
+  :root {
+    color-scheme: light;
+    --plano:     #f9f9f7;
+    --superficie:#fcfcfb;
+    --tinta:     #0b0b0b;
+    --tinta-2:   #52514e;
+    --tinta-3:   #898781;
+    --linea:     #e1e0d9;
+    --eje:       #c3c2b7;
+    --borde:     rgba(11,11,11,.10);
+    --serie-1:   #2a78d6;
+    --serie-2:   #eb6834;
+    --bien:      #0ca30c;
+    --aviso:     #fab219;
+    --grave:     #d03b3b;
+    --bien-txt:  #006300;
+    --aviso-txt: #8a5a00;
+    --grave-txt: #b02a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --plano:     #0d0d0d;
+      --superficie:#1a1a19;
+      --tinta:     #ffffff;
+      --tinta-2:   #c3c2b7;
+      --tinta-3:   #898781;
+      --linea:     #2c2c2a;
+      --eje:       #383835;
+      --borde:     rgba(255,255,255,.10);
+      --serie-1:   #3987e5;
+      --serie-2:   #d95926;
+      --bien-txt:  #0ca30c;
+      --aviso-txt: #fab219;
+      --grave-txt: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --plano:     #0d0d0d;
+    --superficie:#1a1a19;
+    --tinta:     #ffffff;
+    --tinta-2:   #c3c2b7;
+    --tinta-3:   #898781;
+    --linea:     #2c2c2a;
+    --eje:       #383835;
+    --borde:     rgba(255,255,255,.10);
+    --serie-1:   #3987e5;
+    --serie-2:   #d95926;
+    --bien-txt:  #0ca30c;
+    --aviso-txt: #fab219;
+    --grave-txt: #e66767;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--plano);
+    color: var(--tinta);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right)
+             env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  .envoltura { max-width: 980px; margin: 0 auto; padding: 16px 16px 64px; }
+
+  /* ---------- cabecera ---------- */
+  header.barra {
+    display: flex; align-items: baseline; gap: 12px;
+    flex-wrap: wrap; margin-bottom: 20px;
+  }
+  .marca { font-weight: 600; letter-spacing: -.01em; font-size: 15px; }
+  .ciclo { color: var(--tinta-2); font-size: 13px; }
+  .barra .empuje { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+  button.chico {
+    font: inherit; font-size: 12px; color: var(--tinta-2);
+    background: var(--superficie); border: 1px solid var(--borde);
+    border-radius: 7px; padding: 5px 10px; cursor: pointer;
+  }
+  button.chico:hover { color: var(--tinta); }
+
+  .insignia {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 500; padding: 4px 10px;
+    border-radius: 999px; border: 1px solid var(--borde);
+    background: var(--superficie);
+  }
+  .insignia .punto { width: 8px; height: 8px; border-radius: 50%; }
+  .verde .punto { background: var(--bien); }   .verde { color: var(--bien-txt); }
+  .ambar .punto { background: var(--aviso); }  .ambar { color: var(--aviso-txt); }
+  .rojo  .punto { background: var(--grave); }  .rojo  { color: var(--grave-txt); }
+
+  /* ---------- tarjetas ---------- */
+  .tarjeta {
+    background: var(--superficie); border: 1px solid var(--borde);
+    border-radius: 12px; padding: 16px; margin-bottom: 12px;
+  }
+  .tarjeta > h2 {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .06em; color: var(--tinta-3);
+    margin: 0 0 14px;
+  }
+  .rejilla-2 { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 720px) { .rejilla-2 { grid-template-columns: 1fr 1fr; } }
+
+  /* ---------- héroe ---------- */
+  .heroe .etiqueta { font-size: 13px; color: var(--tinta-2); }
+  .heroe .cifra {
+    font-size: 52px; font-weight: 600; letter-spacing: -.03em;
+    line-height: 1.05; margin: 2px 0 6px;
+  }
+  .heroe .pie { font-size: 13px; color: var(--tinta-2); }
+
+  /* ---------- medidor ---------- */
+  .medidor { margin-top: 18px; }
+  .medidor .pista {
+    position: relative;
+    height: 10px; border-radius: 999px; overflow: hidden;
+    background: color-mix(in srgb, var(--serie-1) 16%, transparent);
+    display: flex;
+  }
+  .medidor .relleno { height: 100%; border-radius: 999px; }
+  /* Dónde tocaría ir hoy si la bolsa se repartiera pareja. Dos
+     píxeles de superficie, no una línea de color: el corte lo hace
+     el hueco. */
+  .medidor .hito {
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    background: var(--superficie);
+    box-shadow: 0 0 0 1px var(--superficie);
+  }
+  .medidor .leyenda {
+    display: flex; flex-wrap: wrap; gap: 2px 14px;
+    font-size: 12px; color: var(--tinta-2); margin-top: 7px;
+  }
+  .medidor .leyenda > :last-child { margin-left: auto; }
+
+  /* ---------- fichas ---------- */
+  .fichas {
+    display: grid; gap: 1px; background: var(--borde);
+    border: 1px solid var(--borde); border-radius: 12px;
+    overflow: hidden; margin-bottom: 12px;
+    grid-template-columns: repeat(2, 1fr);
+  }
+  @media (min-width: 640px) { .fichas { grid-template-columns: repeat(4, 1fr); } }
+  .ficha { background: var(--superficie); padding: 13px 14px; }
+  .ficha .t { font-size: 11px; color: var(--tinta-3); text-transform: uppercase; letter-spacing: .05em; }
+  .ficha .v { font-size: 19px; font-weight: 600; letter-spacing: -.02em; margin-top: 3px; }
+  .ficha .n { font-size: 11px; color: var(--tinta-3); margin-top: 2px; }
+
+  /* ---------- gráficos ---------- */
+  .lienzo { position: relative; }
+  .lienzo svg { display: block; width: 100%; height: auto; }
+  .leyenda-g { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 12px; }
+  .clave { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--tinta-2); }
+  .clave .muestra { width: 12px; height: 3px; border-radius: 2px; }
+  .clave .cuadro { width: 10px; height: 10px; border-radius: 3px; }
+
+  .globo {
+    position: absolute; pointer-events: none; opacity: 0;
+    transform: translate(-50%, -100%);
+    background: var(--tinta); color: var(--plano);
+    border-radius: 8px; padding: 7px 10px; font-size: 12px;
+    line-height: 1.45; white-space: nowrap; z-index: 5;
+    transition: opacity .08s;
+  }
+  .globo b { font-weight: 600; }
+
+  /* ---------- listas ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left; font-size: 11px; font-weight: 500; color: var(--tinta-3);
+    text-transform: uppercase; letter-spacing: .05em;
+    padding: 0 0 8px; border-bottom: 1px solid var(--linea);
+  }
+  td { padding: 9px 0; border-bottom: 1px solid var(--linea); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .sutil { color: var(--tinta-3); font-size: 12px; }
+  .sin-conf { color: var(--tinta-3); }
+  .vacio { color: var(--tinta-3); font-size: 13px; padding: 4px 0; }
+
+  .fila-pend { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--linea); }
+  .fila-pend:last-child { border-bottom: 0; }
+  .fila-pend .der { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+  /* ---------- puerta ---------- */
+  .puerta { max-width: 400px; margin: 12vh auto; padding: 0 20px; }
+  .puerta h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+  .puerta p { color: var(--tinta-2); font-size: 13px; margin: 0 0 20px; }
+  .puerta label { display: block; font-size: 12px; color: var(--tinta-2); margin: 14px 0 5px; }
+  .puerta input {
+    width: 100%; font: inherit; padding: 9px 11px;
+    background: var(--superficie); color: var(--tinta);
+    border: 1px solid var(--borde); border-radius: 8px;
+  }
+  .puerta button {
+    width: 100%; margin-top: 20px; font: inherit; font-weight: 500;
+    padding: 10px; border: 0; border-radius: 8px; cursor: pointer;
+    background: var(--serie-1); color: #fff;
+  }
+  .error { color: var(--grave-txt); font-size: 13px; margin-top: 12px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="puerta" id="puerta" hidden>
+  <h1>pace</h1>
+  <p>El panel guarda estos dos datos solo en este navegador.</p>
+  <label for="f-url">URL del proyecto Supabase</label>
+  <input id="f-url" placeholder="https://abcdefgh.supabase.co" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <label for="f-token">PANEL_TOKEN</label>
+  <input id="f-token" type="password" placeholder="••••••••••••" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <button id="f-entrar">Entrar</button>
+  <div class="error" id="f-error" hidden></div>
+</div>
+
+<div class="envoltura" id="app" hidden>
+  <header class="barra">
+    <span class="marca">pace</span>
+    <span class="ciclo" id="h-ciclo"></span>
+    <span class="empuje">
+      <span id="h-estado"></span>
+      <button class="chico" id="b-tema" title="Claro / oscuro">◐</button>
+      <button class="chico" id="b-refrescar">Actualizar</button>
+    </span>
+  </header>
+  <div id="cuerpo"></div>
+  <p class="sutil" id="h-pie" style="margin-top:20px"></p>
+</div>
+
+<script type="module">
+// ============================================================
+// Estado local
+// ============================================================
+const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch { /* modo privado */ } };
+const leer = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+
+const $ = (s) => document.querySelector(s);
+
+// ============================================================
+// Formato
+// ============================================================
+const fmt2 = new Intl.NumberFormat("es-PE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt0 = new Intl.NumberFormat("es-PE", { maximumFractionDigits: 0 });
+const nf = (n) => fmt2.format(Number(n ?? 0));
+const nf0 = (n) => fmt0.format(Number(n ?? 0));
+const soles = (n) => "S/ " + nf(n);
+const soles0 = (n) => "S/ " + nf0(n);
+const mayus = (s) => String(s ?? "").charAt(0).toUpperCase() + String(s ?? "").slice(1);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+const dia = (iso) => {
+  const d = new Date(iso);
+  return d.toLocaleDateString("es-PE", { day: "numeric", month: "short", timeZone: "America/Lima" });
+};
+const hora = (iso) =>
+  new Date(iso).toLocaleTimeString("es-PE", { hour: "numeric", minute: "2-digit", timeZone: "America/Lima" });
+
+const TITULO_ESTADO = {
+  verde: "en rango",
+  ambar: "ritmo alto",
+  rojo: "fuera de rango",
+};
+
+// ============================================================
+// Gráficos — SVG a mano
+//
+// Marcas finas, cuadrícula de un paso sobre la superficie, una
+// sola línea de base, y el color puesto por identidad y no por
+// qué tan mal va la cosa: la línea del gasto es azul aunque el
+// ciclo esté en rojo. El estado se dice con la insignia y el
+// medidor, que llevan icono y texto además del color.
+// ============================================================
+const PAD = { arriba: 14, der: 14, abajo: 26, izq: 48 };
+
+function ejeY(max) {
+  // Ticks en números redondos: 0 / 500 / 1.000 …
+  //
+  // El último tick tiene que quedar POR ENCIMA del máximo, no en
+  // el valor más alto que quepa debajo: es el tope de la escala y
+  // si se queda corto la barra se sale del marco por arriba.
+  const pasos = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000];
+  const paso = pasos.find((p) => max / p <= 5) ?? 25000;
+  const tope = Math.max(Math.ceil(max / paso) * paso, paso);
+  const t = [];
+  for (let v = 0; v <= tope + 0.001; v += paso) t.push(v);
+  return t;
+}
+
+function marcoSVG(ancho, alto, max, ticksX, ticksY) {
+  const x0 = PAD.izq, x1 = ancho - PAD.der;
+  const y0 = PAD.arriba, y1 = alto - PAD.abajo;
+  let s = "";
+  for (const t of ticksY) {
+    const y = y1 - (t / max) * (y1 - y0);
+    s += `<line x1="${x0}" y1="${y.toFixed(1)}" x2="${x1}" y2="${y.toFixed(1)}" stroke="var(--linea)" stroke-width="1"/>`;
+    s += `<text x="${x0 - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--tinta-3)" style="font-variant-numeric:tabular-nums">${nf0(t)}</text>`;
+  }
+  s += `<line x1="${x0}" y1="${y1}" x2="${x1}" y2="${y1}" stroke="var(--eje)" stroke-width="1"/>`;
+  for (const { x, txt } of ticksX) {
+    s += `<text x="${x.toFixed(1)}" y="${alto - 8}" text-anchor="middle" font-size="11" fill="var(--tinta-3)">${txt}</text>`;
+  }
+  return s;
+}
+
+// ------------------------------------------------------------
+// Ritmo del ciclo: acumulado real contra el plan, y a dónde
+// llegas si sigues así. Es el gráfico del proyecto: el gasto de
+// un día suelto no dice nada, la curva sí.
+// ------------------------------------------------------------
+function graficoRitmo(cont, e, porDia) {
+  const ancho = Math.max(cont.clientWidth, 280);
+  const alto = ancho < 480 ? 210 : 250;
+  const x0 = PAD.izq, x1 = ancho - PAD.der, y0 = PAD.arriba, y1 = alto - PAD.abajo;
+
+  const dias = Number(e.dias_ciclo);
+  const bolsa = Number(e.bolsa);
+  const proy = Number(e.proyeccion);
+  const topeCrudo = Math.max(bolsa, proy, ...porDia.map((d) => Number(d.acumulado)), 1);
+  const ticksY = ejeY(topeCrudo);
+  const max = ticksY[ticksY.length - 1];
+
+  const px = (d) => x0 + ((d - 1) / Math.max(dias - 1, 1)) * (x1 - x0);
+  const py = (v) => y1 - (Math.max(v, 0) / max) * (y1 - y0);
+
+  const ticksX = [];
+  const cada = dias > 20 ? 5 : dias > 10 ? 3 : 2;
+  for (let d = 1; d <= dias; d += cada) ticksX.push({ x: px(d), txt: String(d) });
+
+  let s = marcoSVG(ancho, alto, max, ticksX, ticksY);
+
+  // Referencia: la bolsa entera
+  s += `<line x1="${x0}" y1="${py(bolsa).toFixed(1)}" x2="${x1}" y2="${py(bolsa).toFixed(1)}"
+        stroke="var(--eje)" stroke-width="1"/>`;
+  s += `<text x="${x1}" y="${(py(bolsa) - 6).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--tinta-3)">bolsa ${soles0(bolsa)}</text>`;
+
+  // Plan: la bolsa repartida pareja
+  s += `<line x1="${px(1)}" y1="${py(bolsa / dias).toFixed(1)}" x2="${px(dias)}" y2="${py(bolsa).toFixed(1)}"
+        stroke="var(--tinta-3)" stroke-width="2" stroke-linecap="round"/>`;
+
+  // Gasto real
+  const pts = porDia.map((d) => [px(Number(d.dia)), py(Number(d.acumulado))]);
+  if (pts.length) {
+    const linea = pts.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    s += `<path d="${linea} L${pts[pts.length - 1][0].toFixed(1)},${y1} L${pts[0][0].toFixed(1)},${y1} Z"
+          fill="var(--serie-1)" fill-opacity=".10"/>`;
+    s += `<path d="${linea}" fill="none" stroke="var(--serie-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+
+    // Proyección: de hoy al cierre al ritmo actual
+    const [hx, hy] = pts[pts.length - 1];
+    s += `<path d="M${hx.toFixed(1)},${hy.toFixed(1)} L${px(dias).toFixed(1)},${py(proy).toFixed(1)}"
+          fill="none" stroke="var(--serie-1)" stroke-width="2" stroke-opacity=".32" stroke-linecap="round"/>`;
+    s += `<circle cx="${px(dias).toFixed(1)}" cy="${py(proy).toFixed(1)}" r="3.5"
+          fill="var(--serie-1)" fill-opacity=".45"/>`;
+    s += `<circle cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="4.5"
+          fill="var(--serie-1)" stroke="var(--superficie)" stroke-width="2"/>`;
+  }
+
+  cont.innerHTML = `<svg viewBox="0 0 ${ancho} ${alto}" width="${ancho}" height="${alto}" role="img"
+    aria-label="Gasto acumulado del ciclo contra el plan">${s}</svg><div class="globo" id="globo-ritmo"></div>`;
+
+  // Capa de hover: cruz y globo sobre el día más cercano
+  const svg = cont.querySelector("svg");
+  const globo = cont.querySelector("#globo-ritmo");
+  const cruz = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  cruz.setAttribute("stroke", "var(--eje)");
+  cruz.setAttribute("stroke-width", "1");
+  cruz.setAttribute("opacity", "0");
+  svg.appendChild(cruz);
+
+  const mover = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const cx = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) * (ancho / r.width);
+    let mejor = null, dist = Infinity;
+    for (const d of porDia) {
+      const dd = Math.abs(px(Number(d.dia)) - cx);
+      if (dd < dist) { dist = dd; mejor = d; }
+    }
+    if (!mejor) return;
+    const bx = px(Number(mejor.dia)), by = py(Number(mejor.acumulado));
+    cruz.setAttribute("x1", bx); cruz.setAttribute("x2", bx);
+    cruz.setAttribute("y1", y0); cruz.setAttribute("y2", y1);
+    cruz.setAttribute("opacity", "1");
+    const delta = Number(mejor.acumulado) - Number(mejor.ideal);
+    globo.innerHTML =
+      `<b>Día ${mejor.dia}</b> · ${dia(mejor.fecha)}<br>` +
+      `Ese día: ${soles(mejor.monto)}<br>` +
+      `Acumulado: <b>${soles(mejor.acumulado)}</b><br>` +
+      `Plan: ${soles(mejor.ideal)} (${delta >= 0 ? "+" : "−"}${nf(Math.abs(delta))})`;
+    // El SVG se dibuja al ancho real del contenedor, así que las
+    // coordenadas del viewBox son las de la pantalla salvo por el
+    // reescalado que mete el zoom del navegador.
+    const escala = r.height / alto;
+    globo.style.opacity = "1";
+    globo.style.left = (bx * (r.width / ancho)) + "px";
+    globo.style.top = ((by - 14) * escala) + "px";
+  };
+  const salir = () => { globo.style.opacity = "0"; cruz.setAttribute("opacity", "0"); };
+  svg.addEventListener("mousemove", mover);
+  svg.addEventListener("mouseleave", salir);
+  svg.addEventListener("touchstart", mover, { passive: true });
+  svg.addEventListener("touchmove", mover, { passive: true });
+  svg.addEventListener("touchend", salir);
+}
+
+// ------------------------------------------------------------
+// En qué se va: barras horizontales, una sola serie. Las
+// categorías son el eje, no series, así que van todas del mismo
+// color y el nombre lo dice todo.
+// ------------------------------------------------------------
+function graficoCategorias(cont, filas) {
+  if (!filas.length) { cont.innerHTML = '<p class="vacio">Todavía no hay gasto variable en este ciclo.</p>'; return; }
+  const total = filas.reduce((a, f) => a + Number(f.monto), 0);
+  const max = Math.max(...filas.map((f) => Number(f.monto)));
+  cont.innerHTML = filas.map((f) => {
+    const m = Number(f.monto);
+    const pct = total ? Math.round((m / total) * 100) : 0;
+    return `
+      <div style="margin-bottom:11px" title="${esc(f.categoria)}: ${soles(m)} en ${f.n} movimiento${f.n === 1 ? "" : "s"}">
+        <div style="display:flex;justify-content:space-between;gap:10px;font-size:13px;margin-bottom:5px">
+          <span>${esc(mayus(f.categoria))}</span>
+          <span style="color:var(--tinta-2);font-variant-numeric:tabular-nums">${soles(m)} <span class="sutil">· ${pct}%</span></span>
+        </div>
+        <div style="height:8px;border-radius:0 4px 4px 0;background:var(--serie-1);width:${Math.max((m / max) * 100, 2)}%"></div>
+      </div>`;
+  }).join("");
+}
+
+// ------------------------------------------------------------
+// Cómo pagas: lo que ya salió de la cuenta contra lo que llega
+// después como estado de cuenta. Dos segmentos separados por
+// 2px de superficie, cada uno con su etiqueta directa.
+// ------------------------------------------------------------
+function graficoMetodo(cont, e, filas) {
+  const cred = Number(e.gastado_credito), cont_ = Number(e.gastado_contado);
+  const tot = cred + cont_;
+  if (!tot) { cont.innerHTML = '<p class="vacio">Todavía no hay gasto variable en este ciclo.</p>'; return; }
+
+  const detalle = filas.map((f) => `
+    <div class="fila-pend">
+      <span>${esc(f.banco)} <span class="sutil">· ${esc(f.tipo)}</span></span>
+      <span class="der">${soles(f.monto)} <span class="sutil">· ${f.n}</span></span>
+    </div>`).join("");
+
+  cont.innerHTML = `
+    <div class="leyenda-g">
+      <span class="clave"><span class="cuadro" style="background:var(--serie-1)"></span>Ya salió · ${soles(cont_)}</span>
+      <span class="clave"><span class="cuadro" style="background:var(--serie-2)"></span>A crédito · ${soles(cred)}</span>
+    </div>
+    <div style="display:flex;height:22px;border-radius:5px;overflow:hidden;gap:2px;background:transparent">
+      ${cont_ ? `<div style="flex:${cont_};background:var(--serie-1);border-radius:4px 0 0 4px"></div>` : ""}
+      ${cred ? `<div style="flex:${cred};background:var(--serie-2);border-radius:${cont_ ? "0 4px 4px 0" : "4px"}"></div>` : ""}
+    </div>
+    <p class="sutil" style="margin:10px 0 14px">
+      El crédito cuenta el día que pasas la tarjeta, no el día que pagas el estado de cuenta.
+      ${cred ? `De este ciclo, ${soles(cred)} llega después como recibo.` : ""}
+    </p>
+    ${detalle}`;
+}
+
+// ------------------------------------------------------------
+// Ciclos cerrados: cuánto se barrió al ahorro en cada uno. Es la
+// métrica del proyecto — no "gasté menos", sino "quedó margen".
+// ------------------------------------------------------------
+function graficoHistorial(cont, filas) {
+  if (!filas.length) { cont.innerHTML = '<p class="vacio">Todavía no hay ciclos cerrados. Aparecen cuando registres el siguiente sueldo.</p>'; return; }
+  const ancho = Math.max(cont.clientWidth, 280);
+  const alto = 180;
+  const x0 = PAD.izq, x1 = ancho - PAD.der, y0 = PAD.arriba, y1 = alto - PAD.abajo;
+  const ticksY = ejeY(Math.max(...filas.map((f) => Number(f.sobrante) || 0), 1));
+  const max = ticksY[ticksY.length - 1];
+  const banda = (x1 - x0) / filas.length;
+  const grosor = Math.min(banda * 0.55, 24);
+
+  const ticksX = filas.map((f, i) => ({
+    x: x0 + banda * (i + 0.5),
+    txt: String(f.etiqueta ?? "").split(" ")[0].slice(0, 3),
+  }));
+  let s = marcoSVG(ancho, alto, max, ticksX, ticksY);
+
+  filas.forEach((f, i) => {
+    const v = Number(f.sobrante) || 0;
+    const h = (v / max) * (y1 - y0);
+    const x = x0 + banda * (i + 0.5) - grosor / 2;
+    s += `<path d="M${x},${y1} L${x},${(y1 - h + 4).toFixed(1)} Q${x},${(y1 - h).toFixed(1)} ${x + 4},${(y1 - h).toFixed(1)}
+          L${x + grosor - 4},${(y1 - h).toFixed(1)} Q${x + grosor},${(y1 - h).toFixed(1)} ${x + grosor},${(y1 - h + 4).toFixed(1)}
+          L${x + grosor},${y1} Z" fill="var(--serie-1)"><title>${esc(f.etiqueta)}: ${soles(v)} al ahorro</title></path>`;
+    s += `<text x="${(x + grosor / 2).toFixed(1)}" y="${(y1 - h - 7).toFixed(1)}" text-anchor="middle"
+          font-size="11" fill="var(--tinta-2)">${nf0(v)}</text>`;
+  });
+
+  cont.innerHTML = `<svg viewBox="0 0 ${ancho} ${alto}" width="${ancho}" height="${alto}" role="img"
+    aria-label="Sobrante barrido al ahorro por ciclo cerrado">${s}</svg>`;
+}
+
+// ============================================================
+// Render
+// ============================================================
+let ultimo = null;
+
+function pintar(d) {
+  ultimo = d;
+  const e = d.estado;
+  if (!e) {
+    $("#cuerpo").innerHTML = `<div class="tarjeta"><h2>Sin ciclo abierto</h2>
+      <p class="vacio">Registra tu sueldo desde el Atajo <b>Ingreso</b>, o corre
+      <code>select abrir_ciclo(hoy_lima());</code> en el SQL Editor.</p></div>`;
+    $("#h-ciclo").textContent = "";
+    $("#h-estado").innerHTML = "";
+    return;
+  }
+
+  $("#h-ciclo").textContent = `${e.etiqueta ?? ""} · día ${e.dia_actual} de ${e.dias_ciclo}`;
+  $("#h-estado").innerHTML =
+    `<span class="insignia ${e.estado}"><span class="punto"></span>${TITULO_ESTADO[e.estado] ?? e.estado}</span>`;
+
+  const bolsa = Number(e.bolsa), gastado = Number(e.gastado);
+  const usado = bolsa > 0 ? Math.min(gastado / bolsa, 1) : 1;
+  const planHoy = bolsa > 0 ? Math.min(e.dia_actual / e.dias_ciclo, 1) : 0;
+  const colorEstado = { verde: "var(--bien)", ambar: "var(--aviso)", rojo: "var(--grave)" }[e.estado];
+
+  $("#cuerpo").innerHTML = `
+    <div class="tarjeta heroe">
+      <div class="etiqueta">Hoy puedes gastar</div>
+      <div class="cifra">${soles(e.permitido_dia)}</div>
+      <div class="pie">
+        Quedan <b>${soles(e.disponible)}</b> para ${e.dias_restantes} día${e.dias_restantes === 1 ? "" : "s"}.
+        Vienes gastando ${soles(e.ritmo)} al día.
+      </div>
+
+      <div class="medidor">
+        <div class="pista">
+          <div class="relleno" style="width:${(usado * 100).toFixed(1)}%;background:${colorEstado}"></div>
+          <div class="hito" style="left:${(planHoy * 100).toFixed(1)}%"></div>
+        </div>
+        <div class="leyenda">
+          <span>${soles(gastado)} de ${soles(bolsa)} · ${Math.round(usado * 100)}% de la bolsa</span>
+          <span class="sutil">a estas alturas tocaba ${Math.round(planHoy * 100)}%</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="fichas">
+      <div class="ficha"><div class="t">Ingreso</div><div class="v">${soles0(e.ingreso)}</div>
+        <div class="n">${Number(e.retiros) ? "+" + soles0(e.retiros) + " de ahorros" : "confirmado"}</div></div>
+      <div class="ficha"><div class="t">Al ahorro</div><div class="v">${soles0(e.ahorro)}</div>
+        <div class="n">reservado, fuera de la bolsa</div></div>
+      <div class="ficha"><div class="t">Fijos + servicios</div><div class="v">${soles0(Number(e.fijos_total) + Number(e.servicios_total))}</div>
+        <div class="n">${Number(e.fijos_pendientes) ? soles0(e.fijos_pendientes) + " sin pagar" : "todo pagado"}</div></div>
+      <div class="ficha"><div class="t">Proyección</div><div class="v">${soles0(e.proyeccion)}</div>
+        <div class="n">${Number(e.ratio) > 1 ? "se pasa de la bolsa" : "cabe en la bolsa"}</div></div>
+    </div>
+
+    <div class="tarjeta">
+      <h2>Ritmo del ciclo</h2>
+      <div class="leyenda-g">
+        <span class="clave"><span class="muestra" style="background:var(--serie-1)"></span>Gasto acumulado</span>
+        <span class="clave"><span class="muestra" style="background:var(--tinta-3)"></span>Plan (bolsa repartida pareja)</span>
+        <span class="clave"><span class="muestra" style="background:var(--serie-1);opacity:.32"></span>A dónde llegas a este ritmo</span>
+      </div>
+      <div class="lienzo" id="g-ritmo"></div>
+    </div>
+
+    <div class="rejilla-2">
+      <div class="tarjeta"><h2>En qué se va</h2><div id="g-categorias"></div></div>
+      <div class="tarjeta"><h2>Cómo pagas</h2><div id="g-metodo"></div></div>
+    </div>
+
+    <div class="rejilla-2">
+      <div class="tarjeta"><h2>Fijos y servicios</h2>${listaFijos(d)}</div>
+      <div class="tarjeta"><h2>Ingresos del ciclo</h2>${listaIngresos(d.ingresos)}</div>
+    </div>
+
+    ${avisos(d)}
+
+    <div class="tarjeta">
+      <h2>Últimos movimientos</h2>
+      ${tablaMovimientos(d.movimientos)}
+    </div>
+
+    <div class="tarjeta">
+      <h2>Al ahorro por ciclo</h2>
+      <div class="lienzo" id="g-historial"></div>
+    </div>`;
+
+  graficoRitmo($("#g-ritmo"), e, d.por_dia ?? []);
+  graficoCategorias($("#g-categorias"), d.por_categoria ?? []);
+  graficoMetodo($("#g-metodo"), e, d.por_metodo ?? []);
+  graficoHistorial($("#g-historial"), d.historial ?? []);
+
+  $("#h-pie").textContent =
+    `Actualizado ${hora(d.generado_en)} · los números salen de estado_ciclo() en Postgres.`;
+}
+
+function listaFijos(d) {
+  const f = (d.fijos ?? []).map((x) => `
+    <div class="fila-pend">
+      <span>${esc(x.nombre)} ${x.pagado ? "" : '<span class="sutil">· pendiente</span>'}</span>
+      <span class="der" ${x.pagado ? 'style="color:var(--tinta-3)"' : ""}>${soles(x.monto)}</span>
+    </div>`).join("");
+  const s = (d.servicios ?? []).map((x) => `
+    <div class="fila-pend">
+      <span>${esc(x.nombre)} <span class="sutil">· ${x.pagado ? "pagado" : "estimado"}</span></span>
+      <span class="der" ${x.pagado ? 'style="color:var(--tinta-3)"' : ""}>${soles(x.pagado ?? x.estimado)}</span>
+    </div>`).join("");
+  return (f + s) || '<p class="vacio">Sin fijos ni servicios activos.</p>';
+}
+
+function listaIngresos(xs) {
+  if (!xs?.length) return '<p class="vacio">Sin ingresos registrados en este ciclo.</p>';
+  return xs.map((x) => `
+    <div class="fila-pend">
+      <span>${esc(x.fuente)}
+        <span class="sutil">· ${x.principal ? "sueldo" : x.es_retiro ? "de ahorros" : "extra"}${x.confirmado ? "" : " · sin confirmar"}</span>
+      </span>
+      <span class="der">${soles(x.monto)}</span>
+    </div>`).join("");
+}
+
+function avisos(d) {
+  const recibos = d.recibos_pendientes ?? [];
+  const sueltos = d.sin_resolver ?? [];
+  if (!recibos.length && !sueltos.length) return "";
+
+  let s = '<div class="tarjeta"><h2>Para la reconciliación</h2>';
+  if (recibos.length) {
+    s += `<p style="font-size:13px;margin:0 0 10px;color:var(--grave-txt)">
+      ⚠ ${recibos.length} recibo${recibos.length === 1 ? "" : "s"} venció y no llegó ningún pago:</p>`;
+    s += recibos.map((r) => `
+      <div class="fila-pend"><span>${esc(r.servicio)} <span class="sutil">· ${r.dias_atraso} día(s) de atraso</span></span>
+      <span class="der">${soles(r.estimado)}</span></div>`).join("");
+  }
+  if (sueltos.length) {
+    s += `<p style="font-size:13px;margin:${recibos.length ? "16px" : "0"} 0 10px;color:var(--tinta-2)">
+      ${sueltos.length} movimiento${sueltos.length === 1 ? "" : "s"} sin categoría o sin confirmar.
+      Se arreglan en el SQL Editor; el panel es de solo lectura.</p>`;
+  }
+  return s + "</div>";
+}
+
+function tablaMovimientos(xs) {
+  if (!xs?.length) return '<p class="vacio">Sin movimientos en este ciclo.</p>';
+  return `<table><thead><tr>
+      <th>Fecha</th><th>Detalle</th><th>Método</th><th class="num">Monto</th>
+    </tr></thead><tbody>` +
+    xs.map((m) => {
+      const fuera = m.tipo === "pago_tarjeta" || m.tipo === "consumo_monedero" || m.fijo || m.servicio;
+      const que = m.fijo ? `${esc(m.fijo)} <span class="sutil">· fijo</span>`
+        : m.servicio ? `${esc(m.servicio)} <span class="sutil">· servicio</span>`
+        : esc(m.comercio ?? m.nota ?? "—");
+      return `<tr${fuera ? ' style="color:var(--tinta-3)"' : ""}>
+        <td>${dia(m.fecha)}<div class="sutil">${hora(m.fecha)}</div></td>
+        <td>${que}${m.categoria ? `<div class="sutil">${esc(mayus(m.categoria))}</div>` : '<div class="sutil">sin categoría</div>'}</td>
+        <td class="sutil">${esc(m.banco)}<br>${esc(m.tipo)}</td>
+        <td class="num">${soles(m.monto)}${m.confirmado ? "" : '<div class="sutil">sin confirmar</div>'}</td>
+      </tr>`;
+    }).join("") + "</tbody></table>";
+}
+
+// ============================================================
+// Red
+// ============================================================
+function baseDe(url) {
+  const u = String(url).trim().replace(/\/+$/, "");
+  return /\/functions\/v1$/.test(u) ? u : u + "/functions/v1";
+}
+
+async function cargar() {
+  const url = leer("pace_url"), token = leer("pace_token");
+  const r = await fetch(`${baseDe(url)}/resumen`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (r.status === 401) throw new Error("Token rechazado. Revisa PANEL_TOKEN.");
+  if (!r.ok) throw new Error(`El servidor respondió ${r.status}.`);
+  return r.json();
+}
+
+async function refrescar() {
+  const b = $("#b-refrescar");
+  b.textContent = "…"; b.disabled = true;
+  try {
+    pintar(await cargar());
+  } catch (err) {
+    $("#h-pie").innerHTML = `<span class="error">${esc(err.message)}</span>`;
+  } finally {
+    b.textContent = "Actualizar"; b.disabled = false;
+  }
+}
+
+// ============================================================
+// Arranque
+// ============================================================
+$("#b-tema").onclick = () => {
+  const ahora = document.documentElement.getAttribute("data-theme");
+  const oscuro = ahora ? ahora === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.setAttribute("data-theme", oscuro ? "light" : "dark");
+  guardar("pace_tema", oscuro ? "light" : "dark");
+  if (ultimo) pintar(ultimo);
+};
+const temaGuardado = leer("pace_tema");
+if (temaGuardado) document.documentElement.setAttribute("data-theme", temaGuardado);
+
+$("#b-refrescar").onclick = refrescar;
+
+$("#f-entrar").onclick = async () => {
+  const url = $("#f-url").value.trim(), token = $("#f-token").value.trim();
+  if (!url || !token) return;
+  guardar("pace_url", url); guardar("pace_token", token);
+  try {
+    const d = await cargar();
+    $("#puerta").hidden = true; $("#app").hidden = false;
+    pintar(d);
+  } catch (err) {
+    $("#f-error").hidden = false;
+    $("#f-error").textContent = err.message;
+  }
+};
+$("#f-token").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#f-entrar").click(); });
+
+// Volver a la pestaña es la señal de "muéstrame lo de ahora", y
+// no cuesta batería como un temporizador.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !$("#app").hidden) refrescar();
+});
+
+let t;
+addEventListener("resize", () => { clearTimeout(t); t = setTimeout(() => ultimo && pintar(ultimo), 160); });
+
+if (leer("pace_url") && leer("pace_token")) {
+  $("#app").hidden = false;
+  refrescar();
+} else {
+  $("#puerta").hidden = false;
+}
+</script>
+</body>
+</html>
