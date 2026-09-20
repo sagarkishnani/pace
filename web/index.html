@@ -1085,7 +1085,22 @@ function hojaRotar(d) {
         margen, no saldo. No los vuelvas a mandar con el Atajo cuando caigan.
       </p>
       ${filas}
-      ${campo("pct", "% de ahorro del ciclo nuevo", `type="number" min="0" max="100" step="1" value="${d.config?.pct_ahorro ?? 20}"`)}`,
+
+      <p class="intro" style="margin:14px 0 10px">
+        Reglas del ciclo nuevo. ${d.atipico
+          ? `<b>Ojo:</b> vienen del ciclo actual, que está marcado como atípico —
+             revísalas antes de guardar.`
+          : "Vienen del ciclo actual."}
+      </p>
+      <div class="par">
+        ${campo("pct", "% de ahorro", `type="number" min="0" max="100" step="1" value="${d.atipico ? 20 : (d.config?.pct_ahorro ?? 20)}"`)}
+        ${campo("esposa", "Monto a la esposa", `type="number" inputmode="decimal" step="0.01" value="${d.config?.monto_esposa ?? 0}"`)}
+      </div>
+      ${campo("dia_eval", "Evaluar desde el día", `type="number" min="1" max="99" value="${d.atipico ? 5 : (d.config?.dia_inicio_eval ?? 5)}"`)}
+      <p class="pista-ayuda" style="margin-top:-8px">
+        Antes de ese día la proyección es ruido y el estado se queda en verde. 99 la apaga
+        para todo el ciclo.
+      </p>`,
 
     alEnviar: async (fd, form) => {
       const ingresos = [];
@@ -1102,10 +1117,13 @@ function hojaRotar(d) {
         inicio: fd.get("inicio"),
         etiqueta: vacioANulo(fd.get("etiqueta")),
         ingresos,
+        // Explícito y no heredado: un ciclo atípico arrastraba su
+        // dia_inicio_eval = 99 y el ciclo nuevo nacía sin evaluar
+        // nunca, sin que nada lo dijera.
         config: {
           pct_ahorro: num(fd.get("pct")),
-          monto_esposa: d.config?.monto_esposa ?? null,
-          dia_inicio_eval: d.config?.dia_inicio_eval ?? null,
+          monto_esposa: num(fd.get("esposa")),
+          dia_inicio_eval: num(fd.get("dia_eval")),
           alertas_activas: true,
         },
       });
