@@ -51,6 +51,17 @@ const ACCIONES: Record<string, { fn: string; args: (b: Cuerpo) => Record<string,
     }),
   },
 
+  // El sueldo declarado al abrir el ciclo ya cayó. Si llegó un
+  // monto distinto, se corrige acá y la bolsa se recalcula.
+  cobrar: {
+    fn: "cobrar_ingreso",
+    args: (b) => ({
+      p_id: texto(b.id),
+      p_monto: b.monto == null || b.monto === "" ? null : leerMonto(b.monto),
+      p_fecha: texto(b.fecha),
+    }),
+  },
+
   // Pagar un fijo o un servicio: el movimiento entra enlazado y
   // por lo tanto fuera de la bolsa.
   pago: {

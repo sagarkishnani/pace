@@ -689,7 +689,8 @@ function pintar(d) {
 
     <div class="fichas">
       <div class="ficha"><div class="t">Ingreso</div><div class="v">${soles0(e.ingreso)}</div>
-        <div class="n">${Number(e.retiros) ? "+" + soles0(e.retiros) + " de ahorros" : "confirmado"}</div></div>
+        <div class="n">${Number(e.retiros) ? "+" + soles0(e.retiros) + " de ahorros"
+          : Number(d.cobro?.por_cobrar) ? soles0(d.cobro.por_cobrar) + " por cobrar" : "todo cobrado"}</div></div>
       <div class="ficha"><div class="t">Al ahorro</div><div class="v">${soles0(e.ahorro)}</div>
         <div class="n">reservado, fuera de la bolsa</div></div>
       <div class="ficha"><div class="t">Fijos + servicios</div><div class="v">${soles0(Number(e.fijos_total) + Number(e.servicios_total))}</div>
@@ -771,13 +772,24 @@ function listaFijos(d) {
 function listaIngresos(xs) {
   const alta = '<button class="agregar" data-acc="ingreso">+ Registrar ingreso</button>';
   if (!xs?.length) return '<p class="vacio">Sin ingresos registrados en este ciclo.</p>' + alta;
-  return xs.map((x) => `
+  // Un ingreso sin `recibido_el` ya cuenta en la bolsa pero todavía
+  // no cayó: la pastilla lo marca cobrado y corrige el monto.
+  return xs.map((x) => {
+    const falta = !x.recibido_el && !x.es_retiro;
+    const distinto = x.recibido_el && x.monto_esperado != null &&
+      Number(x.monto_esperado) !== Number(x.monto);
+    return `
     <div class="fila-pend">
       <span>${esc(x.fuente)}
-        <span class="sutil">· ${x.principal ? "sueldo" : x.es_retiro ? "de ahorros" : "extra"}${x.confirmado ? "" : " · sin confirmar"}</span>
+        <span class="sutil">· ${x.principal ? "sueldo" : x.es_retiro ? "de ahorros" : "extra"}${
+          falta ? " · por cobrar" : x.recibido_el ? ` · cobrado ${dia(x.recibido_el)}` : ""}${
+          distinto ? ` · esperabas ${soles(x.monto_esperado)}` : ""}${x.confirmado ? "" : " · sin confirmar"}</span>
       </span>
-      <span class="der">${soles(x.monto)}</span>
-    </div>`).join("") + alta;
+      <span class="der" ${falta ? 'style="color:var(--tinta-3)"' : ""}>${soles(x.monto)}${
+        falta ? `<button class="pastilla" data-acc="cobrar" data-id="${x.id}">Cobrado</button>` : ""
+      }</span>
+    </div>`;
+  }).join("") + alta;
 }
 
 function avisos(d) {
@@ -1137,7 +1149,7 @@ function hojaRotar(d) {
 function hojaIngreso() {
   hoja({
     titulo: "Registrar ingreso",
-    intro: "Para lo que no estaba previsto. El sueldo del ciclo ya se registró al abrirlo.",
+    intro: "Para lo que no estaba previsto y ya tienes en la mano. El sueldo del ciclo ya se registró al abrirlo: cuando caiga, márcalo cobrado en la lista.",
     cuerpo: `
       ${campo("monto", "Monto", `type="number" inputmode="decimal" step="0.01" autofocus`)}
       ${campo("fuente", "Fuente", `type="text" placeholder="Bono, venta, devolución…"`)}
@@ -1159,6 +1171,31 @@ function hojaIngreso() {
         fuente: vacioANulo(fd.get("fuente")) ?? "Otro",
         clase: fd.get("clase"),
       });
+    },
+  });
+}
+
+// ------------------------------------------------------------
+// Marcar cobrado un ingreso esperado
+//
+// El monto viene precargado con lo declarado. Si llegó distinto se
+// corrige acá, que es el único momento en que el motor se entera
+// de que un sueldo vino corto.
+// ------------------------------------------------------------
+function hojaCobro(item, d) {
+  hoja({
+    titulo: `Cobré ${item.fuente}`,
+    intro: "Ya estaba contado en la bolsa. Si llegó el monto esperado, nada cambia; si no, la bolsa se ajusta.",
+    accionTexto: "Marcar cobrado",
+    cuerpo: `
+      <div class="par">
+        ${campo("monto", "Monto que llegó", `type="number" inputmode="decimal" step="0.01" value="${item.monto ?? ""}" autofocus`)}
+        ${campo("fecha", "Cayó el", `type="date" value="${d.hoy ?? ""}"`)}
+      </div>`,
+    alEnviar: (fd) => {
+      const monto = num(fd.get("monto"));
+      if (!monto || monto <= 0) throw new Error("Falta un monto válido");
+      return accion({ accion: "cobrar", id: item.id, monto, fecha: vacioANulo(fd.get("fecha")) });
     },
   });
 }
@@ -1301,6 +1338,10 @@ document.addEventListener("click", (ev) => {
       return hojaReglas(d);
     case "rotar":    return hojaRotar(d);
     case "ingreso":  return hojaIngreso();
+    case "cobrar": {
+      const item = buscar("ingresos");
+      return item ? hojaCobro(item, d) : aviso("No encontré ese ingreso", true);
+    }
     case "fijo":     return hojaFijo(id ? buscar("fijos") : null);
     case "servicio": return hojaServicio(id ? buscar("servicios") : null);
     case "pago": {

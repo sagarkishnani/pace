@@ -56,6 +56,7 @@ supabase/
   migrations/006_panel.sql     débito/crédito, panel(), alertas, ingresos
   migrations/007_atipico.sql   ciclos no comparables, simulación de ahorro
   migrations/008_acciones.sql  las escrituras del panel
+  migrations/009_cobros.sql    ingresos esperados vs cobrados
   functions/accion/index.ts    POST /accion   — escrituras del panel
   functions/gasto/index.ts     POST /gasto    — Atajo "Gasto"
   functions/ingreso/index.ts   POST /ingreso  — Atajo "Ingreso"
@@ -545,6 +546,7 @@ Authorization: Bearer <PANEL_TOKEN>
 |---|---|---|
 | `ingreso` | `monto`, `fuente`, `clase` | `registrar_ingreso` (nunca rota desde el panel) |
 | `pago` | `clase` (`fijo`/`servicio`), `id`, `monto`, `metodo` | `registrar_pago` |
+| `cobrar` | `id`, `monto`, `fecha` | `cobrar_ingreso` — marca cobrado un ingreso esperado |
 | `rotar` | `confirmar: true`, `inicio`, `etiqueta`, `ingresos[]`, `config{}` | `rotar_ciclo` |
 | `config` | `pct_ahorro`, `monto_esposa`, `dia_inicio_eval`, `alertas_activas`, `nota` | `actualizar_config` |
 | `fijo` | `id` (nulo crea), `nombre`, `monto`, `dia_aprox`, `activo` | `guardar_fijo` |

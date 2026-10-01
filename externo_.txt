@@ -1,0 +1,91 @@
+Tue Sep 22 01:31:41 UTC 2026
+* Host negocios.fiberlux.pe:443 was resolved.
+* IPv6: (none)
+* IPv4: 181.224.229.3
+*   Trying 181.224.229.3:443...
+* Connected to negocios.fiberlux.pe (181.224.229.3) port 443
+* ALPN: curl offers h2,http/1.1
+* (304) (OUT), TLS handshake, Client hello (1):
+} [325 bytes data]
+*  CAfile: /etc/ssl/cert.pem
+*  CApath: none
+* (304) (IN), TLS handshake, Server hello (2):
+{ [122 bytes data]
+* (304) (IN), TLS handshake, Unknown (8):
+{ [25 bytes data]
+* (304) (IN), TLS handshake, Certificate (11):
+{ [4083 bytes data]
+* (304) (IN), TLS handshake, CERT verify (15):
+{ [264 bytes data]
+* (304) (IN), TLS handshake, Finished (20):
+{ [52 bytes data]
+* (304) (OUT), TLS handshake, Finished (20):
+} [52 bytes data]
+* SSL connection using TLSv1.3 / AEAD-AES256-GCM-SHA384 / [blank] / UNDEF
+* ALPN: server accepted http/1.1
+* Server certificate:
+*  subject: CN=negocios.fiberlux.pe
+*  start date: Aug 30 07:04:22 2026 GMT
+*  expire date: Nov 28 07:04:21 2026 GMT
+*  subjectAltName: host "negocios.fiberlux.pe" matched cert's "negocios.fiberlux.pe"
+*  issuer: C=US; O=Let's Encrypt; CN=YR2
+*  SSL certificate verify ok.
+* using HTTP/1.x
+> GET / HTTP/1.1
+> Host: negocios.fiberlux.pe
+> User-Agent: Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
+> Accept: */*
+> 
+* Request completely sent off
+< HTTP/1.1 200 OK
+< Date: Tue, 22 Sep 2026 01:31:54 GMT
+< Server: Apache
+< Content-Length: 0
+< Content-Type: text/html; charset=UTF-8
+< 
+* Connection #0 to host negocios.fiberlux.pe left intact
+* Host negocios.fiberlux.pe:443 was resolved.
+* IPv6: (none)
+* IPv4: 181.224.229.3
+*   Trying 181.224.229.3:443...
+* Connected to negocios.fiberlux.pe (181.224.229.3) port 443
+* ALPN: curl offers h2,http/1.1
+* (304) (OUT), TLS handshake, Client hello (1):
+} [325 bytes data]
+*  CAfile: /etc/ssl/cert.pem
+*  CApath: none
+* (304) (IN), TLS handshake, Server hello (2):
+{ [122 bytes data]
+* (304) (IN), TLS handshake, Unknown (8):
+{ [25 bytes data]
+* (304) (IN), TLS handshake, Certificate (11):
+{ [4083 bytes data]
+* (304) (IN), TLS handshake, CERT verify (15):
+{ [264 bytes data]
+* (304) (IN), TLS handshake, Finished (20):
+{ [52 bytes data]
+* (304) (OUT), TLS handshake, Finished (20):
+} [52 bytes data]
+* SSL connection using TLSv1.3 / AEAD-AES256-GCM-SHA384 / [blank] / UNDEF
+* ALPN: server accepted http/1.1
+* Server certificate:
+*  subject: CN=negocios.fiberlux.pe
+*  start date: Aug 30 07:04:22 2026 GMT
+*  expire date: Nov 28 07:04:21 2026 GMT
+*  subjectAltName: host "negocios.fiberlux.pe" matched cert's "negocios.fiberlux.pe"
+*  issuer: C=US; O=Let's Encrypt; CN=YR2
+*  SSL certificate verify ok.
+* using HTTP/1.x
+> GET / HTTP/1.1
+> Host: negocios.fiberlux.pe
+> User-Agent: curl/8.7.1
+> Accept: */*
+> 
+* Request completely sent off
+< HTTP/1.1 200 OK
+< Date: Tue, 22 Sep 2026 01:32:07 GMT
+< Server: Apache
+< Content-Length: 0
+< Content-Type: text/html; charset=UTF-8
+< 
+* Connection #0 to host negocios.fiberlux.pe left intact

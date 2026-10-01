@@ -16,6 +16,7 @@ supabase/
   migrations/006_panel.sql     débito/crédito, hoy_lima, panel(), alertas, ingresos
   migrations/007_atipico.sql   ciclos no comparables y simulación de % de ahorro
   migrations/008_acciones.sql  las escrituras del panel
+  migrations/009_cobros.sql    ingresos esperados vs cobrados
   functions/accion/index.ts    POST /accion   — escrituras del panel
   functions/gasto/index.ts     POST /gasto    — Atajo "Gasto"
   functions/ingreso/index.ts   POST /ingreso  — Atajo "Ingreso"
@@ -55,6 +56,14 @@ como `confirmado = true` el día 1 con `nota = 'esperado'`, antes de caer. No es
 como suena: la bolsa nunca fue el saldo de la cuenta — ya resta el alquiler antes de
 pagarlo y los servicios como estimados. Mide *margen*, no caja. El riesgo que queda es que
 un sueldo llegue corto y el motor no se entere; se verifica el monto al cobrar.
+
+**Un ingreso esperado tiene `recibido_el` nulo** (migración 009). Cuenta en la bolsa
+igual que uno cobrado; lo que agrega es que el panel muestra cuánto del ciclo sigue
+apoyado en plata que no ha llegado, y al caer se marca con `cobrar_ingreso()` — que
+corrige `monto` si llegó distinto y deja lo declarado en `monto_esperado`. La columna
+tiene `default hoy_lima()`: lo que entra por el Atajo o por `registrar_ingreso()` ya está
+en la mano. Solo `rotar_ciclo()` escribe el nulo a propósito; un `insert` a mano de un
+sueldo por adelantado tiene que poner `recibido_el = null` explícito.
 
 **Corolario: no usar el Atajo Ingreso para el sueldo.** Ya está registrado; mandarlo otra
 vez duplica el ingreso e infla la bolsa. El Atajo queda para `extra` y `retiro`. Se ve en
@@ -205,6 +214,8 @@ como gasto variable de un ciclo ya cerrado.
 **`rotar_ciclo()` hace el ritual del día 1 en una transacción**: cierra, abre, registra
 los ingresos esperados y fija las reglas. Va junto porque a medio camino el estado es
 incoherente — un ciclo abierto sin ingresos tiene la bolsa en negativo y sale rojo.
+Lo registrado desde la fecha de inicio en adelante se muda al ciclo nuevo: rotar el 1 a
+mediodía dejaba el desayuno del 1 dentro del ciclo anterior.
 
 **El deslizador del % pide `simular_actual()` una vez y luego solo indexa.** El número que
 se ve al mover el dedo sale de `simular_ciclo()` en Postgres, no de una fórmula repetida
@@ -327,7 +338,7 @@ supabase-js. Ese es el criterio para decidir qué va a `_shared`: la lectura del
 las notificaciones (`notificar.ts`) están afuera del handler precisamente para poder
 probarlos.
 
-El SQL no tiene suite. Se valida levantando un Postgres local, corriendo las seis
+El SQL no tiene suite. Se valida levantando un Postgres local, corriendo las
 migraciones en orden y sembrando un ciclo de ejemplo — así se encontraron el desborde del
 eje y el `current_date` en UTC.
 
@@ -375,7 +386,7 @@ false` y `dia_inicio_eval = 99`. No sirve de línea base y no siembra la config 
 
 | | |
 |---|---|
-| Ingreso | 7100 — 5000 oficina (principal) + 2100 TWNSTUDIOS, registrados por adelantado |
+| Ingreso | 7100 — 5100 Métrica (principal) + 2000 TWNSTUDIOS, registrados por adelantado; los dos caen a fin de octubre |
 | `pct_ahorro` | **20%** → S/ 1,420. Empezar bajo y subir si el mes sale holgado; un % que se rompe cada quincena ahorra menos que uno que se cumple |
 | `monto_esposa` | 500 |
 | Fijos (2350) | Alquiler 2200, Mantenimiento 150 |
@@ -432,9 +443,10 @@ supabase functions deploy gasto
 supabase functions deploy ingreso
 supabase functions deploy resumen
 supabase functions deploy alerta
+supabase functions deploy accion          # sin esta, el panel lee pero no escribe
 ```
 
-Las cuatro van con `verify_jwt = false` en `config.toml`: ninguna habla con un cliente de
+Las cinco van con `verify_jwt = false` en `config.toml`: ninguna habla con un cliente de
 Supabase, así que ninguna trae un JWT de Supabase en el `Authorization`. Con
 `verify_jwt = true` el gateway las rechaza con 401 antes de que corran, y el error no dice
 por qué.
