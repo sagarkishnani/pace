@@ -17,6 +17,7 @@ supabase/
   migrations/007_atipico.sql   ciclos no comparables y simulación de % de ahorro
   migrations/008_acciones.sql  las escrituras del panel
   migrations/009_cobros.sql    ingresos esperados vs cobrados
+  migrations/010_dia.sql       presupuesto del día y desvío contra el plan
   functions/accion/index.ts    POST /accion   — escrituras del panel
   functions/gasto/index.ts     POST /gasto    — Atajo "Gasto"
   functions/ingreso/index.ts   POST /ingreso  — Atajo "Ingreso"
@@ -188,6 +189,13 @@ celular con señal de calle; ocho viajes son medio segundo cada uno y un estado 
 cargar. Además mantiene la regla de la casa: los números salen de `estado_ciclo()` y nadie
 los recalcula en el cliente. Si el panel empezara a sumar por su cuenta habría dos
 verdades, y la del celular sería la que se mira.
+
+**El número grande del panel es lo que queda del presupuesto de hoy** (`estado_dia()`,
+migración 010), no `permitido_dia`. El presupuesto del día se fija con lo que había al
+amanecer —`(disponible + gastado_hoy) / dias_restantes`— y no se mueve al gastar; lo que
+queda de él sí, y puede salir negativo. `permitido_dia` reparte el exceso entre los días
+que faltan y por eso seguía diciendo "puedes gastar 45" después de gastar 220 en un día de
+53. `desvio` es lo gastado contra la bolsa repartida pareja: lo gastado de más en el ciclo.
 
 **El panel lee por `/resumen`, no por PostgREST.** RLS está activo sin políticas públicas:
 la `anon key` no lee nada. La alternativa sería meter la `service_role key` en el

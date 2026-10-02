@@ -13,3 +13,6 @@ supabase/.branches/
 # Node / Cloudflare
 node_modules/
 .wrangler/
+
+# Respaldos de datos: son movimientos reales
+respaldo/

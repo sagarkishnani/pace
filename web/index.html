@@ -664,12 +664,7 @@ function pintar(d) {
 
   $("#cuerpo").innerHTML = `
     <div class="tarjeta heroe">
-      <div class="etiqueta">Hoy puedes gastar</div>
-      <div class="cifra">${soles(e.permitido_dia)}</div>
-      <div class="pie">
-        Quedan <b>${soles(e.disponible)}</b> para ${e.dias_restantes} día${e.dias_restantes === 1 ? "" : "s"}.
-        Vienes gastando ${soles(e.ritmo)} al día.
-      </div>
+      ${heroeDia(d)}
       ${d.atipico ? `<p class="sutil" style="margin:10px 0 0">
         Este ciclo está marcado como <b>atípico</b>. Los números son reales, pero no
         entran en promedios ni siembran las reglas del ciclo siguiente.
@@ -741,6 +736,34 @@ function pintar(d) {
 
   $("#h-pie").textContent =
     `Actualizado ${hora(d.generado_en)} · los números salen de estado_ciclo() en Postgres.`;
+}
+
+// El número grande es lo que queda del presupuesto de hoy, no lo
+// que queda repartido entre los días que faltan: ese segundo sigue
+// positivo aunque hoy te hayas pasado, y leído como "puedes gastar
+// más" es falso. Todo sale de estado_dia() en Postgres.
+function heroeDia(d) {
+  const e = d.estado, h = d.dia;
+  const dias = `${e.dias_restantes} día${e.dias_restantes === 1 ? "" : "s"}`;
+  if (!h) return `
+      <div class="etiqueta">Hoy puedes gastar</div>
+      <div class="cifra">${soles(e.permitido_dia)}</div>
+      <div class="pie">Quedan <b>${soles(e.disponible)}</b> para ${dias}.</div>`;
+
+  const queda = Number(h.queda_hoy), desvio = Number(h.desvio);
+  const pasado = queda < 0;
+  return `
+      <div class="etiqueta">${pasado ? "Hoy te pasaste por" : "Hoy te queda"}</div>
+      <div class="cifra" ${pasado ? 'style="color:var(--grave-txt)"' : ""}>${soles(Math.abs(queda))}</div>
+      <div class="pie">
+        Gastaste <b>${soles(h.gastado_hoy)}</b> hoy; el día daba para <b>${soles(h.presupuesto_hoy)}</b>.
+        ${pasado && h.desde_manana != null
+          ? `Para compensarlo, desde mañana son <b>${soles(h.desde_manana)}</b> al día.`
+          : `Quedan ${soles(e.disponible)} para ${dias}.`}
+        <br>En el ciclo vas ${Math.abs(desvio) < 0.005 ? "justo en el plan"
+          : `<b>${soles(Math.abs(desvio))}</b> ${desvio > 0 ? "por encima" : "por debajo"} del plan`}:
+        ${soles(e.gastado)} gastados, a estas alturas tocaban ${soles(h.plan_acumulado)}.
+      </div>`;
 }
 
 // El nombre abre la edición; la pastilla registra el pago. Dos
